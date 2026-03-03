@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -19,6 +20,9 @@ class AndroidImageMatcher {
   static MediaProjectionScreenshot get _screenshotOrCreate => _screenshot ??= MediaProjectionScreenshot();
   static const _channel = MethodChannel('com.example.nexus_flutter/app');
   static const double stateMatchThreshold = 0.3;
+
+  /// 클릭 이벤트 레코딩 모드 (테스트용)
+  static bool recordClicks = false;
 
   /// 디버그용: 설정하면 각 단계 로그 출력
   static void Function(String text)? debugLog;
@@ -439,6 +443,30 @@ class AndroidImageMatcher {
   /// UIAutomator 선택자 맵. first는 여기 없으면 OpenCV로 처리.
   static Map<String, Map<String, String?>>? selectorOverrides;
 
+  /// 클릭 시 어떤 선택자/노드가 사용됐는지 JSONL로 기록 (테스트/학습용)
+  static Future<void> _recordClickEvent(
+    String stepName,
+    Map<String, String?>? selector,
+    String? matchedNode,
+    String? screenNodesSummary,
+  ) async {
+    if (!recordClicks) return;
+    try {
+      final dir = await AutomationLogFile.getLogDirectory();
+      final file = File(p.join(dir, 'safepal_clicks.jsonl'));
+      final event = <String, Object?>{
+        'ts': DateTime.now().toIso8601String(),
+        'step': stepName,
+        'selector': selector,
+        'matched': matchedNode,
+        'screenNodes': screenNodesSummary,
+      };
+      await file.writeAsString('${jsonEncode(event)}\n', mode: FileMode.append);
+    } catch (_) {
+      // 기록 실패는 테스트 모드에서만 사용되므로 무시
+    }
+  }
+
   // 이미지 매칭 비활성화
   // /// first 전용: OpenCV 템플릿 매칭 후 해당 위치 클릭.
   // static Future<bool> _clickImageByOpenCv(...) async {
@@ -468,12 +496,13 @@ class AndroidImageMatcher {
     if (name == 'first' && sel != null &&
         (sel['resourceId'] != null || sel['text'] != null || sel['contentDesc'] != null || sel['className'] != null)) {
       _log('→ first 시도 중... (선택자 desc contains)');
-      final (ok, _, screenNodes) = await clickBySelector(
+      final (ok, matched, screenNodes) = await clickBySelector(
         resourceId: sel['resourceId'],
         text: sel['text'],
         contentDesc: sel['contentDesc'],
         className: sel['className'],
       );
+      await _recordClickEvent(name, sel, matched, screenNodes);
       if (ok) {
         await Future.delayed(Duration(milliseconds: (delaySec * 1000).round()));
         if (waitScreenChange) {
@@ -500,12 +529,13 @@ class AndroidImageMatcher {
       return false;
     }
     _log('→ $name 시도 중...');
-    final (ok, _, screenNodes) = await clickBySelector(
+    final (ok, matched, screenNodes) = await clickBySelector(
       resourceId: sel['resourceId'],
       text: sel['text'],
       contentDesc: sel['contentDesc'],
       className: sel['className'],
     );
+    await _recordClickEvent(name, sel, matched, screenNodes);
     if (!ok && screenNodes != null && screenNodes.isNotEmpty) {
       _log('  [$name] 찾는 조건: res=${sel['resourceId']} text=${sel['text']} desc=${sel['contentDesc']}');
       _log('  [$name] 화면 노드: $screenNodes');
@@ -553,13 +583,14 @@ class AndroidImageMatcher {
       return false;
     }
     _log('→ $name 시도 중... (오른쪽 탭)');
-    final (ok, _, screenNodes) = await clickBySelector(
+    final (ok, matched, screenNodes) = await clickBySelector(
       resourceId: sel['resourceId'],
       text: sel['text'],
       contentDesc: sel['contentDesc'],
       className: sel['className'],
       tapAtRight: true,
     );
+    await _recordClickEvent(name, sel, matched, screenNodes);
     if (!ok && screenNodes != null && screenNodes.isNotEmpty) {
       _log('  [$name] 찾는 조건: res=${sel['resourceId']} text=${sel['text']} desc=${sel['contentDesc']}');
       _log('  [$name] 화면 노드: $screenNodes');
