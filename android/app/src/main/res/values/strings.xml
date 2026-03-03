@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_label">Nexus</string>
+    <string name="accessibility_service_description">Nexus 앱이 SafePal 자동화를 위해 화면 터치를 시뮬레이션합니다.</string>
+</resources>
