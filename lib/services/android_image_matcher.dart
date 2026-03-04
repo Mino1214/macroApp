@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -16,13 +15,9 @@ import 'automation_log_file.dart';
 /// Android 이미지 캡처 + 템플릿 매칭 + 터치 (API 24+ dispatchGesture)
 /// 템플릿 폴더: data/trustwallet/ (first, second, third, fourth, phrase1~4, chain, wordinput, wordpaste, wordnext, fail, success, successPage, wallet, delete, delete2, 0~9)
 class AndroidImageMatcher {
-  static MediaProjectionScreenshot? _screenshot;
-  static MediaProjectionScreenshot get _screenshotOrCreate => _screenshot ??= MediaProjectionScreenshot();
+  static final MediaProjectionScreenshot _screenshot = MediaProjectionScreenshot();
   static const _channel = MethodChannel('com.example.nexus_flutter/app');
   static const double stateMatchThreshold = 0.3;
-
-  /// 클릭 이벤트 레코딩 모드 (테스트용)
-  static bool recordClicks = false;
 
   /// 디버그용: 설정하면 각 단계 로그 출력
   static void Function(String text)? debugLog;
@@ -35,27 +30,25 @@ class AndroidImageMatcher {
   /// 템플릿 서브폴더: null/'trustwallet' = Trust Wallet, 'app' = SafePal (first.png, errorword.png)
   static String? templateSubdir;
 
-  // 이미지 매칭 비활성화
-  // /// SafePal: 번들 템플릿을 documents로 복사 (릴리즈 APK에서 rootBundle 이슈 대비)
-  // static Future<void> ensureAppTemplatesInDocuments() async {
-  //   const templates = ['first', 'errorword'];
-  //   final subdir = templateSubdir ?? 'trustwallet';
-  //   if (subdir != 'app') return;
-  //   try {
-  //     final dirPath = await picsDir;
-  //     final dir = Directory(dirPath);
-  //     if (!dir.existsSync()) dir.createSync(recursive: true);
-  //     for (final name in templates) {
-  //       final f = '$name.png';
-  //       try {
-  //         final bytes = await rootBundle.load('assets/data/app/$f');
-  //         final file = File(p.join(dirPath, f));
-  //         await file.writeAsBytes(bytes.buffer.asUint8List());
-  //       } catch (_) {}
-  //     }
-  //   } catch (_) {}
-  // }
-  static Future<void> ensureAppTemplatesInDocuments() async {}
+  /// SafePal: 번들 템플릿을 documents로 복사 (릴리즈 APK에서 rootBundle 이슈 대비)
+  static Future<void> ensureAppTemplatesInDocuments() async {
+    const templates = ['first', 'errorword'];
+    final subdir = templateSubdir ?? 'trustwallet';
+    if (subdir != 'app') return;
+    try {
+      final dirPath = await picsDir;
+      final dir = Directory(dirPath);
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      for (final name in templates) {
+        final f = '$name.png';
+        try {
+          final bytes = await rootBundle.load('assets/data/app/$f');
+          final file = File(p.join(dirPath, f));
+          await file.writeAsBytes(bytes.buffer.asUint8List());
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
 
   /// 템플릿 이미지 폴더 경로 (data/trustwallet 또는 data/app)
   static Future<String> get picsDir async {
@@ -65,7 +58,7 @@ class AndroidImageMatcher {
   }
 
   static Future<void> requestScreenPermission() async {
-    _screenshotOrCreate.requestPermission();
+    _screenshot.requestPermission();
   }
 
   static Future<bool> hasTouchPermission() async {
@@ -249,14 +242,23 @@ class AndroidImageMatcher {
   }
 
   static Future<Uint8List?> _captureScreen(int x, int y, int w, int h) async {
-    return null; // 화면캡처 비활성화 — MediaProjection 팝업 방지
-    // try {
-    //   final result = await _screenshot
-    //       .takeCapture(x: x, y: y, width: w, height: h)
-    //       .timeout(const Duration(seconds: 15));
-    //   final bytes = result?.bytes;
-    //   ...
-    // } catch (e, st) { ... }
+    try {
+      final result = await _screenshot
+          .takeCapture(x: x, y: y, width: w, height: h)
+          .timeout(const Duration(seconds: 15));
+      final bytes = result?.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        _log('[캡처] 실패 (데이터 없음)');
+        return null;
+      }
+      return bytes;
+    } on TimeoutException catch (_) {
+      _log('[캡처] 실패 (타임아웃)');
+      return null;
+    } catch (e, st) {
+      _log('[캡처] 실패: $e');
+      return null;
+    }
   }
 
   /// 화면 변경 감지용: 이미지를 32x32로 줄여 해시 계산 (image 4.x 호환)
@@ -352,43 +354,89 @@ class AndroidImageMatcher {
     return null;
   }
 
-  /// [이미지 매칭 비활성화] 화면에서 템플릿 찾기 — OpenCV 사용 안 함.
+  /// 화면에서 템플릿 찾기. (절대 x,y)=중심, confidence, scale, 화면해시, (tw,th)=템플릿 크기.
   static Future<(((int x, int y) abs, double confidence, double scale), int? screenHash, (int w, int h)? templateSize)?> findImage(
     String name, {
     double threshold = 0.3,
   }) async {
-    return null; // 이미지 매칭 비활성화
-    // if (!Platform.isAndroid) return null;
-    // final totalStopwatch = Stopwatch()..start();
-    // final (w, h) = await _getScreenSize();
-    // _log('[캡처] 새 화면 캡처 후 $name 검색');
-    // final bytes = await _captureScreen(0, 0, w, h);
-    // if (bytes == null || bytes.isEmpty) return null;
-    // final screenImg = img.decodeImage(bytes);
-    // if (screenImg == null) { totalStopwatch.stop(); _log('[매칭] $name: 스크린 이미지 디코드 실패'); return null; }
-    // final template = await _loadTemplate(name);
-    // if (template == null) { totalStopwatch.stop(); _log('[템플릿] $name 로드 실패'); return null; }
-    // try {
-    //   final templatePng = img.encodePng(template);
-    //   if (templatePng != null && templatePng.isNotEmpty) {
-    //     final openCvResult = await _channel.invokeMethod<Map<Object?, Object?>>('matchTemplate', {
-    //       'screenBytes': bytes, 'templateBytes': templatePng, 'threshold': threshold,
-    //     });
-    //     if (openCvResult != null && openCvResult['found'] == true) {
-    //       final x = openCvResult['x'] as num?;
-    //       final y = openCvResult['y'] as num?;
-    //       final conf = openCvResult['confidence'] as num?;
-    //       if (x != null && y != null && conf != null) {
-    //         final cw = screenImg.width; final ch = screenImg.height;
-    //         final tapX = (cw != w || ch != h) ? (x.toInt() * w / cw).round() : x.toInt();
-    //         final tapY = (cw != w || ch != h) ? (y.toInt() * h / ch).round() : y.toInt();
-    //         final screenHash = _hashImage(screenImg);
-    //         return (((tapX, tapY), conf.toDouble(), 1.0), screenHash, (template.width, template.height));
-    //       }
-    //     }
-    //   }
-    // } catch (_) {}
-    // return null;
+    if (!Platform.isAndroid) return null;
+    final totalStopwatch = Stopwatch()..start();
+    final (w, h) = await _getScreenSize();
+    _log('[캡처] 새 화면 캡처 후 $name 검색');
+    final bytes = await _captureScreen(0, 0, w, h);
+    if (bytes == null || bytes.isEmpty) return null;
+
+    final screenImg = img.decodeImage(bytes);
+    if (screenImg == null) {
+      totalStopwatch.stop();
+      _log('[매칭] $name: 스크린 이미지 디코드 실패 소요 ${(totalStopwatch.elapsedMilliseconds / 1000.0).toStringAsFixed(2)}초');
+      return null;
+    }
+
+    final template = await _loadTemplate(name);
+    if (template == null) {
+      totalStopwatch.stop();
+      _log('[템플릿] $name 로드 실패 소요 ${(totalStopwatch.elapsedMilliseconds / 1000.0).toStringAsFixed(2)}초');
+      if (debugSaveCaptureAndLog) await _saveStepRecord('${name}_템플릿없음', screenImg, -1, -1);
+      return null;
+    }
+    _log('[템플릿] $name 로드 OK (${template.width}x${template.height})');
+
+    final matchStopwatch = Stopwatch()..start();
+    // 1) OpenCV 먼저 시도 (네이티브, 빠름)
+    try {
+      final templatePng = img.encodePng(template);
+      if (templatePng != null && templatePng.isNotEmpty) {
+        final openCvResult = await _channel.invokeMethod<Map<Object?, Object?>>('matchTemplate', {
+          'screenBytes': bytes,
+          'templateBytes': templatePng,
+          'threshold': threshold,
+        });
+        if (openCvResult != null) {
+          final found = openCvResult['found'];
+          if (found == true) {
+            final x = openCvResult['x'] as num?;
+            final y = openCvResult['y'] as num?;
+            final conf = openCvResult['confidence'] as num?;
+            if (x != null && y != null && conf != null) {
+              matchStopwatch.stop();
+              totalStopwatch.stop();
+              final cx = x.toInt();
+              final cy = y.toInt();
+              // 캡처 해상도 ≠ 디스플레이(터치) 해상도일 수 있음 → 터치 좌표계로 보정
+              final cw = screenImg.width;
+              final ch = screenImg.height;
+              final tapX = (cw != w || ch != h)
+                  ? (cx * w / cw).round()
+                  : cx;
+              final tapY = (cw != w || ch != h)
+                  ? (cy * h / ch).round()
+                  : cy;
+              if (tapX != cx || tapY != cy) {
+                _log('[좌표보정] 캡처 ${cw}x$ch → 디스플레이 ${w}x$h: ($cx,$cy) → ($tapX,$tapY)');
+              }
+              final confidence = conf.toDouble();
+              final screenHash = _hashImage(screenImg);
+              _log('[매칭] $name 찾음(OpenCV) 터치=($tapX,$tapY) 인식률=${confidence.toStringAsFixed(2)} (기준 ${threshold.toStringAsFixed(2)})');
+              if (debugSaveCaptureAndLog) await _saveStepRecord(name, screenImg, tapX, tapY);
+              return (((tapX, tapY), confidence, 1.0), screenHash, (template.width, template.height));
+            }
+          } else {
+            final best = openCvResult['bestConfidence'] as num?;
+            if (best != null) {
+              _log('[매칭] $name OpenCV 최고 일치=${best.toStringAsFixed(2)} (기준 ${threshold.toStringAsFixed(2)} 미달)');
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    // OpenCV만 사용 (Dart 폴백 제거)
+    matchStopwatch.stop();
+    totalStopwatch.stop();
+    _log('[매칭] $name OpenCV에서 미발견');
+    if (debugSaveCaptureAndLog) await _saveStepRecord(name, screenImg, -1, -1);
+    return null;
   }
 
   /// 단계별 기록: 캡처 이미지 저장 — log 폴더 사용 (nexus_automation_log와 동일)
@@ -443,47 +491,36 @@ class AndroidImageMatcher {
   /// UIAutomator 선택자 맵. first는 여기 없으면 OpenCV로 처리.
   static Map<String, Map<String, String?>>? selectorOverrides;
 
-  /// 클릭 시 어떤 선택자/노드가 사용됐는지 JSONL로 기록 (테스트/학습용)
-  static Future<void> _recordClickEvent(
-    String stepName,
-    Map<String, String?>? selector,
-    String? matchedNode,
-    String? screenNodesSummary,
-  ) async {
-    if (!recordClicks) return;
-    try {
-      final dir = await AutomationLogFile.getLogDirectory();
-      final file = File(p.join(dir, 'safepal_clicks.jsonl'));
-      final event = <String, Object?>{
-        'ts': DateTime.now().toIso8601String(),
-        'step': stepName,
-        'selector': selector,
-        'matched': matchedNode,
-        'screenNodes': screenNodesSummary,
-      };
-      await file.writeAsString('${jsonEncode(event)}\n', mode: FileMode.append);
-    } catch (_) {
-      // 기록 실패는 테스트 모드에서만 사용되므로 무시
-    }
-  }
-
-  // 이미지 매칭 비활성화
-  // /// first 전용: OpenCV 템플릿 매칭 후 해당 위치 클릭.
-  // static Future<bool> _clickImageByOpenCv(...) async {
-  //   final res = await findImage(name, threshold: th);
-  //   if (res == null) return false;
-  //   final ((abs, _, _), screenHash, _) = res;
-  //   final ok = await sendTouch(cx, cy);
-  //   ...
-  // }
+  /// first 전용: OpenCV 템플릿 매칭 후 해당 위치 클릭.
   static Future<bool> _clickImageByOpenCv(
     String name, {
     double? threshold,
     double delaySec = 0.2,
     bool waitScreenChange = true,
-  }) async => false;
+  }) async {
+    _log('→ $name 시도 중... (OpenCV)');
+    final th = threshold ?? stateMatchThreshold;
+    final res = await findImage(name, threshold: th);
+    if (res == null) {
+      _log('→ $name ✗ (이미지 미발견)');
+      return false;
+    }
+    final ((abs, _, _), screenHash, _) = res;
+    final (cx, cy) = abs;
+    final ok = await sendTouch(cx, cy);
+    await Future.delayed(Duration(milliseconds: (delaySec * 1000).round()));
+    if (waitScreenChange && screenHash != null) {
+      final changed = await waitForScreenChange(screenHash);
+      if (!changed) {
+        _log('→ $name ✗ (화면변경 미감지)');
+        return false;
+      }
+    }
+    _log('→ $name ✓');
+    return ok;
+  }
 
-  /// first: 선택자 있으면 desc contains로 클릭, 없으면 OpenCV. 나머지는 UIAutomator 선택자.
+  /// first만 OpenCV 이미지 매칭, 나머지는 UIAutomator 선택자.
   static Future<bool> clickImage(
     String name, {
     double? threshold,
@@ -492,50 +529,22 @@ class AndroidImageMatcher {
     bool logStepAndNodes = false,
   }) async {
     if (!Platform.isAndroid) return false;
-    final sel = selectorOverrides?[name];
-    if (name == 'first' && sel != null &&
-        (sel['resourceId'] != null || sel['text'] != null || sel['contentDesc'] != null || sel['className'] != null)) {
-      _log('→ first 시도 중... (선택자 desc contains)');
-      final (ok, matched, screenNodes) = await clickBySelector(
-        resourceId: sel['resourceId'],
-        text: sel['text'],
-        contentDesc: sel['contentDesc'],
-        className: sel['className'],
-      );
-      await _recordClickEvent(name, sel, matched, screenNodes);
-      if (ok) {
-        await Future.delayed(Duration(milliseconds: (delaySec * 1000).round()));
-        if (waitScreenChange) {
-          final hash = await getScreenHash();
-          final changed = await waitForScreenChange(hash);
-          if (!changed) _log('  (화면변경 미확인, 진행)');
-        }
-        _log('→ first ✓');
-        return true;
-      }
-      if (screenNodes != null && screenNodes.isNotEmpty) {
-        _log('  [first] 화면 노드: $screenNodes');
-      }
-      _log('→ first ✗');
-      return false;
-    }
     if (name == 'first') {
-      _log('→ first ✗ (선택자 없음, 이미지 매칭 비활성화)');
-      return false;
+      return _clickImageByOpenCv(name, threshold: threshold, delaySec: delaySec, waitScreenChange: waitScreenChange);
     }
+    final sel = selectorOverrides?[name];
     if (sel == null ||
         (sel['resourceId'] == null && sel['text'] == null && sel['contentDesc'] == null && sel['className'] == null)) {
       _log('→ $name ✗ (선택자 없음)');
       return false;
     }
     _log('→ $name 시도 중...');
-    final (ok, matched, screenNodes) = await clickBySelector(
+    final (ok, _, screenNodes) = await clickBySelector(
       resourceId: sel['resourceId'],
       text: sel['text'],
       contentDesc: sel['contentDesc'],
       className: sel['className'],
     );
-    await _recordClickEvent(name, sel, matched, screenNodes);
     if (!ok && screenNodes != null && screenNodes.isNotEmpty) {
       _log('  [$name] 찾는 조건: res=${sel['resourceId']} text=${sel['text']} desc=${sel['contentDesc']}');
       _log('  [$name] 화면 노드: $screenNodes');
@@ -564,7 +573,7 @@ class AndroidImageMatcher {
     return clickImage(name, threshold: threshold, delaySec: delaySec, waitScreenChange: waitScreenChange);
   }
 
-  /// 선택자 기반 스텝에서 노드 영역 오른쪽 끝으로 탭. first는 선택자 있으면 사용.
+  /// 선택자 기반 스텝에서 노드 영역 오른쪽 끝으로 탭. first는 OpenCV 그대로.
   static Future<bool> clickImageAtRight(
     String name, {
     double? threshold,
@@ -574,7 +583,7 @@ class AndroidImageMatcher {
   }) async {
     if (!Platform.isAndroid) return false;
     if (name == 'first') {
-      return clickImage(name, threshold: threshold, delaySec: delaySec, waitScreenChange: waitScreenChange);
+      return _clickImageByOpenCv(name, threshold: threshold, delaySec: delaySec, waitScreenChange: waitScreenChange);
     }
     final sel = selectorOverrides?[name];
     if (sel == null ||
@@ -583,14 +592,13 @@ class AndroidImageMatcher {
       return false;
     }
     _log('→ $name 시도 중... (오른쪽 탭)');
-    final (ok, matched, screenNodes) = await clickBySelector(
+    final (ok, _, screenNodes) = await clickBySelector(
       resourceId: sel['resourceId'],
       text: sel['text'],
       contentDesc: sel['contentDesc'],
       className: sel['className'],
       tapAtRight: true,
     );
-    await _recordClickEvent(name, sel, matched, screenNodes);
     if (!ok && screenNodes != null && screenNodes.isNotEmpty) {
       _log('  [$name] 찾는 조건: res=${sel['resourceId']} text=${sel['text']} desc=${sel['contentDesc']}');
       _log('  [$name] 화면 노드: $screenNodes');

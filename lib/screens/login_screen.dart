@@ -124,110 +124,107 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bgDark,
-      body: Stack(
-        children: [
-          Center(
-            child: Container(
-              width: 320,
-              padding: const EdgeInsets.all(40),
-              decoration: BoxDecoration(
-                color: AppTheme.bgPanel,
-                border: Border.all(color: Colors.grey.shade700),
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+      body: Center(
+        child: Container(
+          width: 320,
+          padding: const EdgeInsets.all(40),
+          decoration: BoxDecoration(
+            color: AppTheme.bgPanel,
+            border: Border.all(color: Colors.grey.shade700),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const SizedBox(height: 16),
                     Image.asset(
                       'assets/data/app/logo.png',
-                      width: 96,
-                      height: 96,
+                      width: 36,
+                      height: 36,
                       fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => Icon(Icons.account_balance_wallet, size: 96, color: AppTheme.accent),
+                      errorBuilder: (_, __, ___) => Icon(Icons.account_balance_wallet, size: 36, color: AppTheme.accent),
                     ),
-                    const SizedBox(height: 20),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('아이디', style: TextStyle(color: AppTheme.fg, fontSize: 14)),
-                    ),
-                    const SizedBox(height: 4),
-                    TextField(
-                      controller: _idController,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
-                      style: const TextStyle(color: AppTheme.fg, fontSize: 14),
-                      onSubmitted: (_) => _onLogin(),
-                    ),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('비밀번호', style: TextStyle(color: AppTheme.fg, fontSize: 14)),
-                    ),
-                    const SizedBox(height: 4),
-                    TextField(
-                      controller: _passwordController,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
-                      style: const TextStyle(color: AppTheme.fg, fontSize: 14),
-                      onSubmitted: (_) => _onLogin(),
-                    ),
-                    if (_errorVisible && _errorText != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        _errorText!,
-                        style: const TextStyle(color: AppTheme.logRed, fontSize: 13),
-                        maxLines: 2,
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 44,
-                      child: ElevatedButton(
-                        onPressed: _loading ? null : _onLogin,
-                        child: Text(_loading ? '로그인 중...' : '로그인'),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed: _openRegister,
-                      child: Text(
-                        '계정이 없으신가요? 회원가입',
-                        style: TextStyle(color: AppTheme.muted, fontSize: 14),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
+                    const SizedBox(width: 8),
                     Text(
-                      _telegramText,
-                      style: TextStyle(color: AppTheme.muted, fontSize: 12),
-                      textAlign: TextAlign.center,
+                      'Nexus v1.0.2',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.accent,
+                      ),
                     ),
                   ],
                 ),
-              ),
-            ),
-          ),
-          Positioned(
-            left: 16,
-            bottom: 16,
-            child: SafeArea(
-              child: Text(
-                'v1.0.2',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  color: AppTheme.muted,
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('아이디', style: TextStyle(color: AppTheme.fg, fontSize: 14)),
                 ),
-              ),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: _idController,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  style: const TextStyle(color: AppTheme.fg, fontSize: 14),
+                  onSubmitted: (_) => _onLogin(),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('비밀번호', style: TextStyle(color: AppTheme.fg, fontSize: 14)),
+                ),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  style: const TextStyle(color: AppTheme.fg, fontSize: 14),
+                  onSubmitted: (_) => _onLogin(),
+                ),
+                if (_errorVisible && _errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _errorText!,
+                    style: const TextStyle(color: AppTheme.logRed, fontSize: 13),
+                    maxLines: 2,
+                  ),
+                ],
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: ElevatedButton(
+                    onPressed: _loading ? null : _onLogin,
+                    child: Text(_loading ? '로그인 중...' : '로그인'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: _openRegister,
+                  child: Text(
+                    '계정이 없으신가요? 회원가입',
+                    style: TextStyle(color: AppTheme.muted, fontSize: 14),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _telegramText,
+                  style: TextStyle(color: AppTheme.muted, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

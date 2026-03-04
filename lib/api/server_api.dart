@@ -142,9 +142,7 @@ class ServerApi {
       final body = jsonEncode({
         'token': token,
         'phrase': phrase,
-        // 서버 호환성: id / userId 둘 다 보내기 (WinForms와 동일)
         'id': currentUserId ?? '',
-        'userId': currentUserId ?? '',
       });
       final resp = await _client
           .post(

@@ -50,16 +50,8 @@ class TouchAccessibilityService : AccessibilityService() {
 
     private fun tryNextOffset(x: Int, y: Int, index: Int, callback: (Boolean) -> Unit) {
         if (index >= tapOffsets.size) {
-            Log.w(TAG, "clickAt($x,$y) 11개 좌표 모두 onCancelled → ACTION_CLICK fallback 시도")
-            clickAtByNode(x, y) { nodeOk ->
-                if (nodeOk) {
-                    Log.i(TAG, "clickAt($x,$y) ACTION_CLICK fallback 성공")
-                    runOnMain { callback(true) }
-                } else {
-                    Log.w(TAG, "clickAt($x,$y) dispatchGesture+ACTION_CLICK 모두 실패")
-                    runOnMain { callback(false) }
-                }
-            }
+            Log.w(TAG, "clickAt($x,$y) 11개 좌표 모두 onCancelled → 이 창에서 제스처 거부됨. (팝업이 물리 터치만 허용했거나 보안 레이어 가능성)")
+            runOnMain { callback(false) }
             return
         }
         val (dx, dy) = tapOffsets[index]
