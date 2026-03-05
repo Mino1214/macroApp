@@ -105,8 +105,13 @@ class TouchAccessibilityService : AccessibilityService() {
         }
         val toClick = target ?: node
         val ok = toClick.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        Log.i(TAG, "clickAtByNode($x,$y) ACTION_CLICK=${ok}")
+        Log.i(TAG, "clickAtByNode($x,$y) ACTION_CLICK=$ok")
         callback(ok)
+        // AccessibilityNodeInfo는 사용 후 반드시 recycle 해서 누적 사용량을 줄인다.
+        toClick.recycle()
+        if (toClick !== node) {
+            node.recycle()
+        }
     }
 
     /** Down → Move(조금) → Up 매크로식 터치. UP 확실히 전달되도록 duration/지연 보강 */
@@ -216,12 +221,22 @@ class TouchAccessibilityService : AccessibilityService() {
                     ok = gestureOk
                     Log.i(TAG, "clickBySelector dispatchTouch=$ok matched=$matchedDesc")
                     callback(mapOf("ok" to ok, "matched" to matchedDesc))
+                    // dispatchTouch 분기에서도 사용이 끝난 노드들은 즉시 recycle
+                    clickable?.recycle()
+                    if (clickable !== node) {
+                        node.recycle()
+                    }
                 }
             }
             return
         }
         Log.i(TAG, "clickBySelector ACTION_CLICK=$ok matched=$matchedDesc")
         callback(mapOf("ok" to ok, "matched" to matchedDesc))
+        // ACTION_CLICK 분기에서도 AccessibilityNodeInfo를 정리
+        clickable?.recycle()
+        if (clickable !== node) {
+            node.recycle()
+        }
     }
 
     private fun findClickableSelfOrParent(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -325,9 +340,13 @@ class TouchAccessibilityService : AccessibilityService() {
         if (!text.isNullOrEmpty() && text.contains(match, ignoreCase = true)) return node
         if (!desc.isNullOrEmpty() && desc.contains(match, ignoreCase = true)) return node
         for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { child ->
-                findNodeByTextOrDesc(child, match)?.let { return it }
+            val child = node.getChild(i) ?: continue
+            val found = findNodeByTextOrDesc(child, match)
+            if (found != null) {
+                return found
             }
+            // 탐색 후 사용하지 않는 노드는 즉시 recycle
+            child.recycle()
         }
         return null
     }
@@ -463,7 +482,10 @@ class TouchAccessibilityService : AccessibilityService() {
         node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
         node.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
         for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { collectTexts(it, out) }
+            val child = node.getChild(i) ?: continue
+            collectTexts(child, out)
+            // 수집이 끝난 노드는 재사용 풀로 돌려보낸다
+            child.recycle()
         }
     }
 

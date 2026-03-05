@@ -210,25 +210,34 @@ class AutomationRunner {
   ) async {
     int successCount = 0;
     String currentPhrase = '';
+    int firstFailLoops = 0; // first 단계 연속 실패 루프 카운트
 
-    // SafePal 속도 최적화: delaySec 0.2, 단계 간 100~200ms
-    const clickDelay = 0.2;
+    // SafePal 속도 최적화: delaySec 0.18, 단계 간 80~220ms (기존보다 약간 빠르게)
+    const clickDelay = 0.18;
     while (!stopFlag) {
       logLine('--- SafePal first (OpenCV) ---');
       if (!await _retryStep('first', () => AndroidImageMatcher.clickImage('first', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) {
-        await Future.delayed(const Duration(milliseconds: 300));
+        firstFailLoops++;
+        // first가 여러 번 연속으로 실패하면 무한 재시도 대신 강제로 중단해서 사용자가 상태를 확인할 수 있게 한다.
+        if (firstFailLoops >= 5) {
+          logLineRed('→ first 단계가 여러 번 연속으로 실패했습니다. SafePal 화면/해상도/템플릿(first.png)을 확인 후 다시 시작해주세요.');
+          return;
+        }
+        await Future.delayed(const Duration(milliseconds: 260));
         continue;
       }
+      // first가 한 번이라도 성공하면 카운터 리셋
+      firstFailLoops = 0;
       await Future.delayed(const Duration(milliseconds: 200));
 
       logLine('--- second, third ---');
-      if (!await _retryStep('second', () => AndroidImageMatcher.clickImage('second', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) {
-        await Future.delayed(const Duration(milliseconds: 300));
+      if (!await _retryStep('second', () => AndroidImageMatcher.clickImage('second', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false), logLine, logLineRed)) {
+        await Future.delayed(const Duration(milliseconds: 260));
         continue;
       }
       if (stopFlag) break;
-      if (!await _retryStep('third', () => AndroidImageMatcher.clickImage('third', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) {
-        await Future.delayed(const Duration(milliseconds: 300));
+      if (!await _retryStep('third', () => AndroidImageMatcher.clickImage('third', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false), logLine, logLineRed)) {
+        await Future.delayed(const Duration(milliseconds: 260));
         continue;
       }
       await Future.delayed(const Duration(milliseconds: 200));
@@ -237,7 +246,7 @@ class AutomationRunner {
         logLine('--- 비밀번호 ---');
         if (!await _clickPasswordDigits(logLine)) {
           logLineRed('→ 비밀번호 ✗');
-          await Future.delayed(const Duration(milliseconds: 300));
+          await Future.delayed(const Duration(milliseconds: 260));
           continue;
         }
         await Future.delayed(const Duration(milliseconds: 150));
@@ -253,70 +262,80 @@ class AutomationRunner {
       await Future.delayed(const Duration(milliseconds: 80));
 
       logLine('--- 니모닉 첫 1회: paste, next, confirm ---');
-      if (!await _retryStep('paste', () => AndroidImageMatcher.clickImage('paste', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) {
-        await Future.delayed(const Duration(milliseconds: 300));
+      if (!await _retryStep('paste', () => AndroidImageMatcher.clickImage('paste', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false), logLine, logLineRed)) {
+        await Future.delayed(const Duration(milliseconds: 260));
         continue;
       }
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 80));
       if (stopFlag) break;
-      if (!await _retryStep('next', () => AndroidImageMatcher.clickImage('next', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) {
-        await Future.delayed(const Duration(milliseconds: 300));
+      if (!await _retryStep('next', () => AndroidImageMatcher.clickImage('next', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false), logLine, logLineRed)) {
+        await Future.delayed(const Duration(milliseconds: 260));
         continue;
       }
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 80));
       if (stopFlag) break;
-      if (!await _retryStep('confirm', () => AndroidImageMatcher.clickImage('confirm', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) {
-        await Future.delayed(const Duration(milliseconds: 300));
+      if (!await _retryStep('confirm', () => AndroidImageMatcher.clickImage('confirm', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false), logLine, logLineRed)) {
+        await Future.delayed(const Duration(milliseconds: 260));
         continue;
       }
-      await Future.delayed(const Duration(milliseconds: 700)); // confirm 후 화면 안정화
+      await Future.delayed(const Duration(milliseconds: 550)); // confirm 후 화면 안정화
 
       const int maxWaitAttempts = 50; // 약 15초 후 타임아웃
       int waitAttempts = 0;
       const failKeywords = ['지우기', '지갑 가져오기', '클라우드', '내 클라우드'];
-      const successKeywords = ['Bank', 'Coin', 'bank', 'coin'];
+      // SafePal 자산 첫 화면 전용 키워드: '가스 스테이션'만 사용 (가장 고유함)
+      const gasStationKeywords = ['가스 스테이션'];
       while (!stopFlag) {
-        await Future.delayed(const Duration(milliseconds: 300));
-        // paste/next 클릭과 100% 동일한 방식으로 판정 (Kotlin findNodeBySelector 같은 트리 순회)
-        final result = await AndroidImageMatcher.checkScreenKeywords(
-          failKeywords: failKeywords,
-          successKeywords: successKeywords,
+        await Future.delayed(const Duration(milliseconds: 260));
+        // 성공/실패를 분리해서 판정:
+        // 1) 성공 키워드만 먼저 검사:
+        //    '가스 스테이션'이 보이면 SafePal 자산 홈 화면으로 간주 → 성공
+        final gasResult = await AndroidImageMatcher.checkScreenKeywords(
+          failKeywords: const [],
+          successKeywords: gasStationKeywords,
         );
+        final hasGasStation = gasResult == 'success';
 
-        if (result == 'fail') {
+        if (hasGasStation) {
+          logLine('→ success (SafePal 자산 화면 판정: gasStation=$hasGasStation)');
+          onSuccessPhrase(currentPhrase);
+          successCount++;
+          logLine('→ successCount=$successCount (SafePal 성공 누적)');
+          break;
+        }
+
+        // 2) 성공이 아니라면, 이번에는 실패 키워드만 검사해서 fail 여부 판정
+        final failOnly = await AndroidImageMatcher.checkScreenKeywords(
+          failKeywords: failKeywords,
+          successKeywords: const [],
+        );
+        if (failOnly == 'fail') {
           logLine('→ fail → 재귀 (새 문구 시도)');
-          if (!await AndroidImageMatcher.clickImage('delete', threshold: 0.3, delaySec: clickDelay)) break;
-          await Future.delayed(const Duration(milliseconds: 100));
-          if (!await AndroidImageMatcher.clickImage('paste', threshold: 0.3, delaySec: clickDelay)) break;
-          await Future.delayed(const Duration(milliseconds: 100));
+          if (!await AndroidImageMatcher.clickImage('delete', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) break;
+          await Future.delayed(const Duration(milliseconds: 80));
+          if (!await AndroidImageMatcher.clickImage('paste', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) break;
+          await Future.delayed(const Duration(milliseconds: 80));
           // [12생성 & 기억] — 새 문구
           final nextPhrase = await _getNextPhrase();
           if (nextPhrase == null || nextPhrase.isEmpty) break;
           currentPhrase = nextPhrase;
           setClipboard(currentPhrase);
-          await Future.delayed(const Duration(milliseconds: 50));
-          if (!await AndroidImageMatcher.clickImage('next', threshold: 0.3, delaySec: clickDelay)) break;
-          await Future.delayed(const Duration(milliseconds: 100));
-          if (!await AndroidImageMatcher.clickImage('confirm', threshold: 0.3, delaySec: clickDelay)) break;
-          await Future.delayed(const Duration(milliseconds: 450));
+          await Future.delayed(const Duration(milliseconds: 40));
+          if (!await AndroidImageMatcher.clickImage('next', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) break;
+          await Future.delayed(const Duration(milliseconds: 80));
+          if (!await AndroidImageMatcher.clickImage('confirm', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) break;
+          await Future.delayed(const Duration(milliseconds: 360));
           continue;
         }
-        if (result == 'success') {
-          logLine('→ success (Bank/Coin 화면)');
-          onSuccessPhrase(currentPhrase);
-          successCount++;
-          await WalletCountFile.increment();
-          logLine('→ successCount=$successCount');
-          break;
-        }
+
         waitAttempts++;
         final pkg = await AndroidImageMatcher.getActiveWindowPackage();
-        logLine('→ 화면 대기 (paste/next와 동일 방식 검사) result=$result pkg=$pkg $waitAttempts/$maxWaitAttempts');
+        logLine('→ 화면 대기 (SafePal 성공/실패 판정) gas=$hasGasStation fail=$failOnly pkg=$pkg $waitAttempts/$maxWaitAttempts');
         if (waitAttempts >= maxWaitAttempts) {
           logLineRed('→ 화면 판정 타임아웃 → first부터 재시도');
           break;
         }
-        await Future.delayed(const Duration(milliseconds: 250));
+        await Future.delayed(const Duration(milliseconds: 220));
       }
 
       if (successCount >= _safepalDeleteTarget) {
@@ -324,20 +343,20 @@ class AutomationRunner {
         for (int i = 0; i < _safepalDeleteTarget && !stopFlag; i++) {
           logLine('→ 삭제 ${i + 1}/$_safepalDeleteTarget');
           if (!await _retryStep('first', () => AndroidImageMatcher.clickImage('first', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) continue;
-          await Future.delayed(const Duration(milliseconds: 200));
-          if (!await AndroidImageMatcher.clickImageAtRight('select', threshold: 0.3, delaySec: clickDelay)) continue;
-          await Future.delayed(const Duration(milliseconds: 200));
-          if (!await AndroidImageMatcher.clickImage('delete1', threshold: 0.3, delaySec: clickDelay)) continue;
-          await Future.delayed(const Duration(milliseconds: 200));
-          if (!await AndroidImageMatcher.clickImage('delete2', threshold: 0.3, delaySec: clickDelay)) continue;
-          await Future.delayed(const Duration(milliseconds: 200));
+          await Future.delayed(const Duration(milliseconds: 180));
+          if (!await AndroidImageMatcher.clickImageAtRight('select', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) continue;
+          await Future.delayed(const Duration(milliseconds: 180));
+          if (!await AndroidImageMatcher.clickImage('delete1', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) continue;
+          await Future.delayed(const Duration(milliseconds: 180));
+          if (!await AndroidImageMatcher.clickImage('delete2', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) continue;
+          await Future.delayed(const Duration(milliseconds: 180));
           await _clickPasswordDigits(logLine);
-          await Future.delayed(const Duration(milliseconds: 350));
+          await Future.delayed(const Duration(milliseconds: 320));
           successCount--;
         }
       }
 
-      await Future.delayed(const Duration(milliseconds: 250));
+      await Future.delayed(const Duration(milliseconds: 220));
     }
   }
 
@@ -386,24 +405,24 @@ class AutomationRunner {
           }
           setClipboard(phrase);
           addAttemptedPhrase(phrase);
-          await Future.delayed(const Duration(milliseconds: 100));
+          await Future.delayed(const Duration(milliseconds: 80));
 
           if (!await AndroidImageMatcher.clickImage('wordinput', threshold: 0.3, delaySec: 0.3)) {
             logLineRed('→ wordinput ✗');
             break;
           }
-          await Future.delayed(const Duration(milliseconds: 200));
+          await Future.delayed(const Duration(milliseconds: 180));
           if (!await AndroidImageMatcher.clickImage('wordpaste', threshold: 0.3, delaySec: 0.3)) {
             logLineRed('→ wordpaste ✗');
             break;
           }
-          await Future.delayed(const Duration(milliseconds: 200));
+          await Future.delayed(const Duration(milliseconds: 180));
           if (!await AndroidImageMatcher.clickImage('wordnext', threshold: 0.3, delaySec: 0.3)) {
             logLineRed('→ wordnext ✗');
             break;
           }
           firstTimeInLoop = false;
-          await Future.delayed(const Duration(milliseconds: 600));
+          await Future.delayed(const Duration(milliseconds: 520));
           continue;
         }
 
@@ -413,16 +432,16 @@ class AutomationRunner {
         if (failFound != null) {
           logLine('→ fail ✓ (새 니모닉 시도)');
           await AndroidImageMatcher.selectAll();
-          await Future.delayed(const Duration(milliseconds: 150));
+          await Future.delayed(const Duration(milliseconds: 120));
           final phrase = await _getNextPhrase();
           if (phrase == null || phrase.isEmpty) break;
           setClipboard(phrase);
           addAttemptedPhrase(phrase);
-          await Future.delayed(const Duration(milliseconds: 100));
+          await Future.delayed(const Duration(milliseconds: 80));
           if (!await AndroidImageMatcher.clickImage('wordpaste', threshold: 0.3, delaySec: 0.3)) break;
-          await Future.delayed(const Duration(milliseconds: 200));
+          await Future.delayed(const Duration(milliseconds: 180));
           if (!await AndroidImageMatcher.clickImage('wordnext', threshold: 0.3, delaySec: 0.3)) break;
-          await Future.delayed(const Duration(milliseconds: 600));
+          await Future.delayed(const Duration(milliseconds: 520));
           continue;
         }
 

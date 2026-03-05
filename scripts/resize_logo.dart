@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:image/image.dart' as img;
 
+
 void main() async {
   final src = File('assets/data/logo.png');
   if (!src.existsSync()) {

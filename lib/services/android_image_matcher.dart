@@ -289,8 +289,12 @@ class AndroidImageMatcher {
   /// 화면이 이전 해시와 달라질 때까지 대기 (최대 timeout). 변경 시 true, 타임아웃 시 false.
   static Future<bool> waitForScreenChange(
     int? previousHash, {
-    Duration firstWait = const Duration(milliseconds: 600),
-    Duration pollInterval = const Duration(milliseconds: 500),
+    // 화면 변경 감지 기본값을 조금 더 공격적으로 조정:
+    // - firstWait: 600ms → 400ms (첫 캡처를 더 빨리)
+    // - pollInterval: 500ms → 700ms (폴링 횟수 줄이기)
+    // - timeout: 6s 유지 (안전성 그대로)
+    Duration firstWait = const Duration(milliseconds: 400),
+    Duration pollInterval = const Duration(milliseconds: 700),
     Duration timeout = const Duration(seconds: 6),
   }) async {
     if (previousHash == null) return true;

