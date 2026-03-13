@@ -10,6 +10,7 @@ void main() async {
     print('assets/data/logo.png 없음');
     exit(1);
   }
+
   final bytes = await src.readAsBytes();
   final image = img.decodeImage(bytes);
   if (image == null) {
