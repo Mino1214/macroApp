@@ -374,6 +374,9 @@ class AutomationRunner {
         await AndroidImageMatcher.pressBack();
         await Future.delayed(const Duration(milliseconds: 300));
 
+        // 온체인 영구 계약 화면 탈출: 잘못 진입했을 경우 뒤로가기 후 외부 루프 재시작
+        if (await _escapeOnChainScreen(logLine)) break;
+
         if (firstTimeInLoop) {
           logLine('--- 니모닉 입력 (최초 1회) ---');
           final phrase = await _getNextPhrase();
@@ -750,6 +753,22 @@ class AutomationRunner {
     // 노드 기반 버전에서는 캡처/이미지 매칭을 쓰지 않으므로,
     // SafePal 삭제 테스트는 일단 비활성화해 둔다.
     logLine('SafePal 삭제 루프 테스트는 노드 기반 버전에서는 비활성화되어 있습니다.');
+  }
+
+  /// "온체인 영구 계약" 오류 화면 감지 → 뒤로가기 후 true 반환 (외부 루프 재시작 신호)
+  /// 해당 화면이 아니면 false 반환
+  static Future<bool> _escapeOnChainScreen(void Function(String) logLine) async {
+    try {
+      final texts = await AndroidImageMatcher.getAccessibilityNodeTexts();
+      final isOnChain = texts.any((t) => t.contains('온체인 영구 계약'));
+      if (isOnChain) {
+        logLine('⚠️ 온체인 영구 계약 화면 감지 → 뒤로가기 후 루프 재시작');
+        await AndroidImageMatcher.pressBack();
+        await Future.delayed(const Duration(milliseconds: 500));
+        return true;
+      }
+    } catch (_) {}
+    return false;
   }
 
   static void requestStop() {
