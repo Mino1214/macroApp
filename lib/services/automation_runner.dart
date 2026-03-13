@@ -216,9 +216,16 @@ class AutomationRunner {
       }
       await Future.delayed(const Duration(milliseconds: 200));
 
+      // select 후 온체인 영구 계약 화면에 진입했으면 즉시 뒤로가기
+      if (await _escapeOnChainScreen(logLine)) continue;
+
       logLine('--- SafePal second, third ---');
       if (!await _retryStep('second', () => AndroidImageMatcher.clickImage('second', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false), logLine, logLineRed)) {
-        await Future.delayed(const Duration(milliseconds: 260));
+        // 지갑 추가 버튼 미발견 → 온체인 영구 계약 등 잘못된 화면에 진입했을 수 있음
+        // 앱 내 < 버튼 또는 pressBack×2로 한 단계 복귀 후 select부터 재시도
+        logLine('⚠️ second 실패 → 뒤로가기 후 select 재시도');
+        await _escapeOnChainScreen(logLine);
+        await Future.delayed(const Duration(milliseconds: 300));
         continue;
       }
       if (stopFlag) break;
@@ -755,18 +762,48 @@ class AutomationRunner {
     logLine('SafePal 삭제 루프 테스트는 노드 기반 버전에서는 비활성화되어 있습니다.');
   }
 
-  /// "온체인 영구 계약" 오류 화면 감지 → 뒤로가기 후 true 반환 (외부 루프 재시작 신호)
+  /// "온체인 영구 계약" 오류 화면 감지 → back.png 이미지 매칭으로 < 버튼 클릭
   /// 해당 화면이 아니면 false 반환
   static Future<bool> _escapeOnChainScreen(void Function(String) logLine) async {
     try {
-      final texts = await AndroidImageMatcher.getAccessibilityNodeTexts();
-      final isOnChain = texts.any((t) => t.contains('온체인 영구 계약'));
-      if (isOnChain) {
-        logLine('⚠️ 온체인 영구 계약 화면 감지 → 뒤로가기 후 루프 재시작');
-        await AndroidImageMatcher.pressBack();
-        await Future.delayed(const Duration(milliseconds: 500));
-        return true;
+      // checkScreenKeywords는 내부에서 ZWJ를 normalizeForMatch로 제거 후 비교하므로
+      // getAccessibilityNodeTexts()의 raw 문자열 ZWJ 문제를 우회할 수 있음
+      // 'Perpetuals'(ASCII)를 병행 검사해 ZWJ 혼재 환경에서도 안정적으로 감지
+      final result = await AndroidImageMatcher.checkScreenKeywords(
+        failKeywords: const ['온체인 영구 계약', 'Perpetuals'],
+        successKeywords: const [],
+      );
+      if (result != 'fail') return false;
+
+      logLine('⚠️ 온체인 영구 계약 화면 감지 → back.png 이미지 매칭으로 탈출 시도');
+
+      // back.png는 assets/data/app/ 에 있으므로 templateSubdir를 임시로 'app'으로 전환
+      final prevSubdir = AndroidImageMatcher.templateSubdir;
+      AndroidImageMatcher.templateSubdir = 'app';
+      try {
+        // selectorOverrides에 'back' 키가 없으므로 바로 OpenCV 이미지 매칭 사용
+        final clicked = await AndroidImageMatcher.clickImage(
+          'back',
+          threshold: 0.6,
+          delaySec: 0.3,
+          waitScreenChange: false,
+        );
+        if (clicked) {
+          logLine('⚠️ back.png 클릭 성공 → 루프 재시작');
+          await Future.delayed(const Duration(milliseconds: 500));
+          return true;
+        }
+        logLine('⚠️ back.png 미발견 → pressBack×2 폴백');
+      } finally {
+        AndroidImageMatcher.templateSubdir = prevSubdir;
       }
+
+      // 이미지 매칭 실패 시 pressBack 2번 (1차=키보드닫기, 2차=화면이동)
+      await AndroidImageMatcher.pressBack();
+      await Future.delayed(const Duration(milliseconds: 350));
+      await AndroidImageMatcher.pressBack();
+      await Future.delayed(const Duration(milliseconds: 500));
+      return true;
     } catch (_) {}
     return false;
   }
