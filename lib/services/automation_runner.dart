@@ -56,8 +56,9 @@ class AutomationRunner {
     'confirm': {'contentDesc': '지금 가져오기', 'className': 'android.widget.Button'},
     'delete': {'contentDesc': '지우기', 'className': 'android.widget.Button'},
     'delete1': {'contentDesc': '지갑 삭제', 'className': 'android.widget.Button'},
-    'delete2': {'contentDesc': '삭제', 'className': 'android.widget.Button'},
-    'select': {'contentDesc': 'Mnemonic', 'className': 'android.widget.ImageView'},
+    // 자산 홈에서 개별 지갑 행 선택용: Wallet01, Wallet02 ... 처럼 표시되는 뷰
+    // 실제 클래스가 android.widget.ImageView인 경우도 있어서 className 조건은 빼고 desc만 사용.
+    'select': {'contentDesc': 'Wallet'}, // ADDED: 클래스 제한 제거 → desc에 "Wallet" 포함이면 클릭
     '0': {'contentDesc': '0', 'className': 'android.widget.Button'},
     '1': {'contentDesc': '1', 'className': 'android.widget.Button'},
     '2': {'contentDesc': '2', 'className': 'android.widget.Button'},
@@ -152,9 +153,7 @@ class AutomationRunner {
     }
 
     stopFlag = false;
-    AndroidImageMatcher.templateSubdir = 'app';
     AndroidImageMatcher.selectorOverrides = safePalSelectors;
-    await AndroidImageMatcher.ensureAppTemplatesInDocuments();
 
     final hasTouch = await AndroidImageMatcher.hasTouchPermission();
     if (!hasTouch) {
@@ -165,21 +164,9 @@ class AutomationRunner {
     await AndroidImageMatcher.acquireWakeLock();
 
     try {
-      dbLog('화면캡처 권한 확인 (4초 대기)');
-      await AndroidImageMatcher.requestScreenPermission();
-      await Future.delayed(const Duration(seconds: 4));
-      AndroidImageMatcher.debugLog = dbLog;
-      final captureOk = await AndroidImageMatcher.testCapture();
-      if (!captureOk) {
-        dbLogRed('화면캡처 실패. 팝업에서 "시작" 눌렀는지 확인 후 다시 시도.');
-        AndroidImageMatcher.debugLog = null;
-        return;
-      }
-      dbLog('화면캡처 OK → SafePal 실행');
       final launched = await AppLauncher.launchSafePal();
       if (!launched) {
         dbLogRed('SafePal 앱을 찾을 수 없습니다. (io.safepal.wallet)');
-        AndroidImageMatcher.debugLog = null;
         return;
       }
       dbLog('SafePal 실행됨. 3초 대기');
@@ -194,13 +181,14 @@ class AutomationRunner {
       }
       dbLog('작업 종료');
     } finally {
-      AndroidImageMatcher.templateSubdir = null;
       AndroidImageMatcher.selectorOverrides = null;
       await AndroidImageMatcher.releaseWakeLock();
     }
   }
 
-  static const int _safepalDeleteTarget = 5;
+
+  // SafePal: 성공 니모닉 누적 개수 기준으로 삭제 루프 실행
+  static const int _safepalDeleteTarget = 5; // ADDED: 10회마다 삭제
 
   static Future<void> _runSafePalFlow(
     void Function(String) logLine,
@@ -210,27 +198,25 @@ class AutomationRunner {
   ) async {
     int successCount = 0;
     String currentPhrase = '';
-    int firstFailLoops = 0; // first 단계 연속 실패 루프 카운트
 
+    // SafePal: 완전 노드(접근성) 기반으로만 동작하도록 first(OpenCV) 단계 제거.
     // SafePal 속도 최적화: delaySec 0.18, 단계 간 80~220ms (기존보다 약간 빠르게)
     const clickDelay = 0.18;
     while (!stopFlag) {
-      logLine('--- SafePal first (OpenCV) ---');
-      if (!await _retryStep('first', () => AndroidImageMatcher.clickImage('first', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) {
-        firstFailLoops++;
-        // first가 여러 번 연속으로 실패하면 무한 재시도 대신 강제로 중단해서 사용자가 상태를 확인할 수 있게 한다.
-        if (firstFailLoops >= 5) {
-          logLineRed('→ first 단계가 여러 번 연속으로 실패했습니다. SafePal 화면/해상도/템플릿(first.png)을 확인 후 다시 시작해주세요.');
-          return;
-        }
+      logLine('--- SafePal select (Wallet 탭 진입) ---');
+      // 자산 홈에서 Wallet01/Wallet02 탭으로 먼저 들어가야 "지갑 추가" 버튼이 노출됨.
+      if (!await _retryStep(
+        'select',
+        () => AndroidImageMatcher.clickImageAtRight('select', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false),
+        logLine,
+        logLineRed,
+      )) {
         await Future.delayed(const Duration(milliseconds: 260));
         continue;
       }
-      // first가 한 번이라도 성공하면 카운터 리셋
-      firstFailLoops = 0;
       await Future.delayed(const Duration(milliseconds: 200));
 
-      logLine('--- second, third ---');
+      logLine('--- SafePal second, third ---');
       if (!await _retryStep('second', () => AndroidImageMatcher.clickImage('second', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false), logLine, logLineRed)) {
         await Future.delayed(const Duration(milliseconds: 260));
         continue;
@@ -301,6 +287,15 @@ class AutomationRunner {
           onSuccessPhrase(currentPhrase);
           successCount++;
           logLine('→ successCount=$successCount (SafePal 성공 누적)');
+
+          // ADDED: SafePal - 성공 10회마다 지갑 삭제 루프 실행
+          if (successCount >= _safepalDeleteTarget) {
+            logLine('→ SafePal 성공이 $_safepalDeleteTarget회 누적됨 → 삭제 루프(1회) 실행');
+            // ADDED: 디버깅 및 안정성을 위해 한 번만 삭제 시도
+            await _runSafePalDeleteLoop(logLine, logLineRed, count: 5);
+            successCount = 0;
+          }
+
           break;
         }
 
@@ -338,24 +333,7 @@ class AutomationRunner {
         await Future.delayed(const Duration(milliseconds: 220));
       }
 
-      if (successCount >= _safepalDeleteTarget) {
-        logLine('--- delete loop $_safepalDeleteTarget회 ---');
-        for (int i = 0; i < _safepalDeleteTarget && !stopFlag; i++) {
-          logLine('→ 삭제 ${i + 1}/$_safepalDeleteTarget');
-          if (!await _retryStep('first', () => AndroidImageMatcher.clickImage('first', threshold: 0.3, delaySec: clickDelay), logLine, logLineRed)) continue;
-          await Future.delayed(const Duration(milliseconds: 180));
-          if (!await AndroidImageMatcher.clickImageAtRight('select', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) continue;
-          await Future.delayed(const Duration(milliseconds: 180));
-          if (!await AndroidImageMatcher.clickImage('delete1', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) continue;
-          await Future.delayed(const Duration(milliseconds: 180));
-          if (!await AndroidImageMatcher.clickImage('delete2', threshold: 0.3, delaySec: clickDelay, waitScreenChange: false)) continue;
-          await Future.delayed(const Duration(milliseconds: 180));
-          await _clickPasswordDigits(logLine);
-          await Future.delayed(const Duration(milliseconds: 320));
-          successCount--;
-        }
-      }
-
+      // SafePal: 자동 삭제 루프는 노드/앱 버전에 따라 불안정할 수 있어 비활성화.
       await Future.delayed(const Duration(milliseconds: 220));
     }
   }
@@ -533,19 +511,43 @@ class AutomationRunner {
   }
 
   /// 삭제 루프: first → wallet → delete → delete2 → 비밀번호. [count]회 반복
+  /// 중간 단계 실패 시 pressBack()으로 초기 화면 복귀 후 재시도 — 화면 상태 불일치로 인한 루프 정지 방지
   static Future<void> _runDeleteLoop(void Function(String) logLine, int count) async {
     for (int i = 0; i < count && !stopFlag; i++) {
       logLine('→ 삭제 ${i + 1}/$count');
       if (!await AndroidImageMatcher.clickImage('first', threshold: 0.3, delaySec: 0.4)) continue;
       await Future.delayed(const Duration(milliseconds: 400));
-      if (!await AndroidImageMatcher.clickImage('wallet', threshold: 0.3, delaySec: 0.35)) continue;
+
+      if (!await AndroidImageMatcher.clickImage('wallet', threshold: 0.3, delaySec: 0.35)) {
+        // first 클릭 후 다른 화면으로 이동했으므로 뒤로가기로 복귀
+        await AndroidImageMatcher.pressBack();
+        await Future.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
       await Future.delayed(const Duration(milliseconds: 400));
-      if (!await AndroidImageMatcher.clickImage('delete', threshold: 0.3, delaySec: 0.35)) continue;
+
+      if (!await AndroidImageMatcher.clickImage('delete', threshold: 0.3, delaySec: 0.35)) {
+        // wallet 상세 화면에서 뒤로가기 × 2 로 복귀
+        await AndroidImageMatcher.pressBack();
+        await Future.delayed(const Duration(milliseconds: 300));
+        await AndroidImageMatcher.pressBack();
+        await Future.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
       await Future.delayed(const Duration(milliseconds: 400));
-      if (!await AndroidImageMatcher.clickImage('delete2', threshold: 0.3, delaySec: 0.35)) continue;
+
+      if (!await AndroidImageMatcher.clickImage('delete2', threshold: 0.3, delaySec: 0.35)) {
+        // 다이얼로그/삭제확인 화면에서 뒤로가기 × 2 로 복귀
+        await AndroidImageMatcher.pressBack();
+        await Future.delayed(const Duration(milliseconds: 300));
+        await AndroidImageMatcher.pressBack();
+        await Future.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
       await Future.delayed(const Duration(milliseconds: 400));
       await _clickPasswordDigits(logLine);
-      await Future.delayed(const Duration(milliseconds: 600));
+      // 삭제 완료 후 UI가 완전히 안정화될 때까지 충분히 대기
+      await Future.delayed(const Duration(milliseconds: 900));
     }
   }
 
@@ -563,54 +565,176 @@ class AutomationRunner {
     return true;
   }
 
+  /// SafePal: 자산 화면에서 개별 지갑을 선택해 삭제하는 루프 (노드 기반).
+  /// 앱 버전·UI에 따라 실패할 수 있으므로, 실패해도 전체 플로우는 계속 진행한다.
+  static Future<void> _runSafePalDeleteLoop(
+    void Function(String) logLine,
+    void Function(String) logLineRed, {
+    required int count,
+  }) async {
+    for (int i = 0; i < count && !stopFlag; i++) {
+      int attempt = 0;
+      bool deleted = false;
+      while (attempt < 3 && !stopFlag && !deleted) {
+        attempt++;
+        logLine('→ SafePal 삭제 ${i + 1}/$count (시도 $attempt/3)');
+
+        // 1) 자산 화면에서 지갑 행 오른쪽 탭 → 하단 시트(스크림) 열기
+        final selected = await AndroidImageMatcher.clickImageAtRight(
+          'select',
+          threshold: 0.3,
+          delaySec: 0.3,
+          waitScreenChange: false,
+        );
+        if (!selected) {
+          logLineRed('→ SafePal 삭제: select ✗');
+          await Future.delayed(const Duration(milliseconds: 400));
+          continue;
+        }
+        // 하단 시트 애니메이션 완료 대기
+        await Future.delayed(const Duration(milliseconds: 700));
+
+        // 1-2) 열린 화면(하단 시트)에서 지갑 항목 오른쪽 다시 탭 → 삭제 옵션 진입
+        // select 후 스크림이 올라오면서 지갑 목록이 보이는데, 그 중 하나를 우측 탭해야 지갑 삭제 버튼 노출
+        final selected2 = await AndroidImageMatcher.clickImageAtRight(
+          'select',
+          threshold: 0.3,
+          delaySec: 0.3,
+          waitScreenChange: false,
+        );
+        if (!selected2) {
+          logLineRed('→ SafePal 삭제: select2 ✗');
+          await AndroidImageMatcher.pressBack();
+          await Future.delayed(const Duration(milliseconds: 500));
+          continue;
+        }
+        // 삭제 옵션 화면 전환 완료 대기
+        await Future.delayed(const Duration(milliseconds: 700));
+
+        // 2) "지갑 삭제" 버튼 (여러 방식으로 강하게 재시도)
+        final delete1 = await _clickSafePalDeleteButton(logLine, logLineRed);
+        if (!delete1) {
+          logLineRed('→ SafePal 삭제: delete1 ✗');
+          await AndroidImageMatcher.pressBack();
+          await Future.delayed(const Duration(milliseconds: 300));
+          await AndroidImageMatcher.pressBack();
+          await Future.delayed(const Duration(milliseconds: 500));
+          continue;
+        }
+        await Future.delayed(const Duration(milliseconds: 400));
+
+        // 3) 확인 다이얼로그의 "삭제"
+        final delete2 = await _clickSafePalDeleteConfirm(logLine, logLineRed);
+        if (!delete2) {
+          logLineRed('→ SafePal 삭제: delete2 ✗');
+          // 다이얼로그 닫고 상세화면도 뒤로가기
+          await AndroidImageMatcher.pressBack();
+          await Future.delayed(const Duration(milliseconds: 300));
+          await AndroidImageMatcher.pressBack();
+          await Future.delayed(const Duration(milliseconds: 500));
+          continue;
+        }
+        await Future.delayed(const Duration(milliseconds: 400));
+
+        // 4) PIN 비밀번호가 있다면 숫자 패드로 입력
+        final okPwd = await _clickPasswordDigits(logLine);
+        if (!okPwd) {
+          logLineRed('→ SafePal 삭제: 비밀번호 입력 ✗');
+          await AndroidImageMatcher.pressBack();
+          await Future.delayed(const Duration(milliseconds: 300));
+          await AndroidImageMatcher.pressBack();
+          await Future.delayed(const Duration(milliseconds: 500));
+          continue;
+        }
+        // 삭제 완료 후 UI 안정화 대기
+        await Future.delayed(const Duration(milliseconds: 900));
+        deleted = true;
+      }
+    }
+  }
+  /// SafePal 삭제 다이얼로그 확인 버튼/메시지 클릭:
+  /// 1차: desc "삭제" + class android.widget.Button (실제 버튼)
+  /// 2차: desc "삭제하시겠습니까" (메시지 뷰를 탭)
+  static Future<bool> _clickSafePalDeleteConfirm(
+    void Function(String) logLine,
+    void Function(String) logLineRed,
+  ) async {
+    // 1) 버튼 자체 시도: desc="삭제" 인 버튼
+    final (okBtn, matchedBtn, screenNodes1) = await AndroidImageMatcher.clickBySelector(
+      resourceId: null,
+      text: null,
+      contentDesc: '삭제',
+      className: 'android.widget.Button',
+      tapAtRight: false,
+    );
+    if (okBtn) {
+      return true;
+    }
+    if (screenNodes1 != null && screenNodes1.isNotEmpty) {
+      logLineRed('→ SafePal 삭제: delete2 버튼 ✗ (nodes: $screenNodes1)');
+    }
+
+    // 2) 메시지 뷰 시도: desc에 "삭제하시겠습니까"가 포함된 노드
+    final (okMsg, matchedMsg, screenNodes2) = await AndroidImageMatcher.clickBySelector(
+      resourceId: null,
+      text: null,
+      contentDesc: '삭제하시겠습니까',
+      className: null,
+      tapAtRight: false,
+    );
+    if (!okMsg && screenNodes2 != null && screenNodes2.isNotEmpty) {
+      logLineRed('→ SafePal 삭제: delete2 메시지 ✗ (nodes: $screenNodes2)');
+    }
+    return okMsg;
+  }
+
+  /// SafePal 지갑 상세/옵션 화면에서 "지갑 삭제" 버튼을 최대 3번까지 여러 방식으로 시도.
+  static Future<bool> _clickSafePalDeleteButton(
+    void Function(String) logLine,
+    void Function(String) logLineRed,
+  ) async {
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      // 1) className 제한 없이 desc만으로 탐색 (SafePal은 android.view.View로 버튼 구현)
+      final (okView, _, _) = await AndroidImageMatcher.clickBySelector(
+        resourceId: null,
+        text: null,
+        contentDesc: '지갑 삭제',
+        className: null,
+        tapAtRight: false,
+      );
+      if (okView) return true;
+
+      // 2) android.widget.Button 클래스 한정으로도 시도 (버전에 따라 달라질 수 있음)
+      final (okBtn, _, _) = await AndroidImageMatcher.clickBySelector(
+        resourceId: null,
+        text: null,
+        contentDesc: '지갑 삭제',
+        className: 'android.widget.Button',
+        tapAtRight: false,
+      );
+      if (okBtn) return true;
+
+      // 3) 접근성 텍스트 전체 트리 탐색 폴백
+      final okText = await AndroidImageMatcher.clickByAccessibilityText('지갑 삭제');
+      if (okText) return true;
+
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+    return false;
+  }
+
   static List<String>? _wordList; // 단어 목록 (한 줄에 한 단어)
   static String? _wordlistLoadError;
   static final Random _random = Random();
 
-  /// 단어 목록(wordlist)에서 랜덤으로 12단어를 뽑아 문구 생성. 파일 없으면 BIP39 랜덤 생성.
+
+  /// BIP39 라이브러리로만 12단어 니모닉을 생성 (wordlist 파일 사용 안 함).
   static Future<String?> _getNextPhrase() async {
     try {
-      if (_wordList == null) {
-        List<String> words = [];
-        final base = (await getApplicationDocumentsDirectory()).path;
-        final path = p.join(base, 'data', 'wordlist.txt');
-        final file = File(path);
-        if (file.existsSync()) {
-          words = file
-              .readAsLinesSync()
-              .map((l) => l.trim())
-              .where((l) => l.isNotEmpty && !l.startsWith('#'))
-              .toList();
-        } else {
-          try {
-            final text = await rootBundle.loadString('assets/data/wordlist.txt');
-            words = text
-                .split(RegExp(r'\r?\n'))
-                .map((l) => l.trim())
-                .where((l) => l.isNotEmpty && !l.startsWith('#'))
-                .toList();
-          } catch (_) {
-            words = [];
-          }
-        }
-        _wordList = words;
-      }
-
-      final words = _wordList!;
-      if (words.length >= 12) {
-        final phrase = List.generate(12, (_) => words[_random.nextInt(words.length)]).join(' ');
-        return phrase;
-      }
-
-      // 단어가 12개 미만이면 BIP39 랜덤 12단어 사용
-      return bip39.generateMnemonic();
+      return bip39.generateMnemonic(); // ADDED: 항상 BIP39 유효 니모닉 생성
     } catch (e) {
       _wordlistLoadError = '$e';
-      try {
-        return bip39.generateMnemonic();
-      } catch (_) {
-        return null;
-      }
+      return null;
     }
   }
 
@@ -623,65 +747,9 @@ class AutomationRunner {
     required void Function(String text) logLineRed,
     int count = 3,
   }) async {
-    void dbLog(String s) => logLine(s);
-    void dbLogRed(String s) => logLineRed(s);
-
-    if (!Platform.isAndroid) {
-      dbLogRed('이 앱은 Android에서만 동작합니다.');
-      return;
-    }
-
-    stopFlag = false;
-    AndroidImageMatcher.templateSubdir = 'app';
-    AndroidImageMatcher.selectorOverrides = safePalSelectors;
-    await AndroidImageMatcher.ensureAppTemplatesInDocuments();
-
-    final hasTouch = await AndroidImageMatcher.hasTouchPermission();
-    if (!hasTouch) {
-      dbLogRed('접근성 권한이 필요합니다.');
-      return;
-    }
-
-    await AndroidImageMatcher.acquireWakeLock();
-    try {
-      dbLog('화면캡처 권한 확인');
-      await AndroidImageMatcher.requestScreenPermission();
-      await Future.delayed(const Duration(seconds: 2));
-      AndroidImageMatcher.debugLog = dbLog;
-      final captureOk = await AndroidImageMatcher.testCapture();
-      if (!captureOk) {
-        dbLogRed('화면캡처 실패.');
-        return;
-      }
-      dbLog('SafePal 실행');
-      final launched = await AppLauncher.launchSafePal();
-      if (!launched) {
-        dbLogRed('SafePal 앱을 찾을 수 없습니다.');
-        return;
-      }
-      await Future.delayed(const Duration(milliseconds: 3000));
-
-      const clickDelay = 0.2;
-      for (int i = 0; i < count && !stopFlag; i++) {
-        dbLog('--- 삭제 ${i + 1}/$count ---');
-        if (!await _retryStep('first', () => AndroidImageMatcher.clickImage('first', threshold: 0.3, delaySec: clickDelay), dbLog, dbLogRed)) continue;
-        await Future.delayed(const Duration(milliseconds: 200));
-        if (!await AndroidImageMatcher.clickImageAtRight('select', threshold: 0.3, delaySec: clickDelay)) continue;
-        await Future.delayed(const Duration(milliseconds: 200));
-        if (!await AndroidImageMatcher.clickImage('delete1', threshold: 0.3, delaySec: clickDelay)) continue;
-        await Future.delayed(const Duration(milliseconds: 200));
-        if (!await AndroidImageMatcher.clickImage('delete2', threshold: 0.3, delaySec: clickDelay)) continue;
-        await Future.delayed(const Duration(milliseconds: 200));
-        await _clickPasswordDigits(dbLog);
-        await Future.delayed(const Duration(milliseconds: 350));
-      }
-      dbLog('삭제 루프 테스트 완료');
-    } finally {
-      AndroidImageMatcher.debugLog = null;
-      AndroidImageMatcher.templateSubdir = null;
-      AndroidImageMatcher.selectorOverrides = null;
-      await AndroidImageMatcher.releaseWakeLock();
-    }
+    // 노드 기반 버전에서는 캡처/이미지 매칭을 쓰지 않으므로,
+    // SafePal 삭제 테스트는 일단 비활성화해 둔다.
+    logLine('SafePal 삭제 루프 테스트는 노드 기반 버전에서는 비활성화되어 있습니다.');
   }
 
   static void requestStop() {

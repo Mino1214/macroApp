@@ -38,6 +38,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _nodeCollectorCount = 0;
   Timer? _collectorStatusTimer;
 
+  // 히스토리 탭 상태
+  int _currentTabIndex = 0; // 0=자동화, 1=히스토리
+  final ScrollController _historyScrollController = ScrollController();
+  final List<SeedHistoryItem> _historyItems = [];
+  int _historyPage = 1;
+  bool _historyHasNext = true;
+  bool _historyLoading = false;
+  String? _historyError;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +59,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _requestPermissionsOnStart());
     _collectorStatusTimer = Timer.periodic(const Duration(seconds: 1), (_) => _refreshNodeCollectorStatus());
+
+    _historyScrollController.addListener(_onHistoryScroll);
   }
 
   Future<void> _refreshNodeCollectorStatus() async {
@@ -94,8 +105,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   /// 앱 시작 시 권한 자동 요청
   Future<void> _requestPermissionsOnStart() async {
     try {
-      await AndroidImageMatcher.requestScreenPermission();
-      await Future.delayed(const Duration(milliseconds: 500));
       final hasTouch = await AndroidImageMatcher.hasTouchPermission();
       if (!hasTouch) {
         await AndroidImageMatcher.requestTouchPermission();
@@ -501,6 +510,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _sessionTimer?.cancel();
     _collectorStatusTimer?.cancel();
     _logController.dispose();
+    _historyScrollController.dispose();
     _passwordController.dispose();
     _nodeTestController.dispose();
     super.dispose();
@@ -570,43 +580,120 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
+  void _onHistoryScroll() {
+    if (!_historyHasNext || _historyLoading) return;
+    if (!_historyScrollController.hasClients) return;
+    final pos = _historyScrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - 200) {
+      _loadMoreHistory();
+    }
+  }
+
+  Future<void> _loadMoreHistory({bool reset = false}) async {
+    final token = ServerApi.currentToken;
+    if (token == null || token.isEmpty) return;
+    if (reset) {
+      setState(() {
+        _historyItems.clear();
+        _historyPage = 1;
+        _historyHasNext = true;
+        _historyError = null;
+      });
+    }
+    if (!_historyHasNext || _historyLoading) return;
+    setState(() {
+      _historyLoading = true;
+      _historyError = null;
+    });
+    final nextPage = _historyPage;
+    final page = await ServerApi.getSeedHistory(token: token, page: nextPage, pageSize: 30);
+    if (!mounted) return;
+    setState(() {
+      _historyLoading = false;
+      if (page == null) {
+        _historyError = '히스토리를 불러오지 못했습니다.';
+        return;
+      }
+      _historyPage = nextPage + 1;
+      _historyHasNext = page.hasNext;
+      _historyItems.addAll(page.items);
+    });
+  }
+
+  void _onTabChanged(int index) {
+    setState(() {
+      _currentTabIndex = index;
+    });
+    if (index == 1 && _historyItems.isEmpty) {
+      _loadMoreHistory(reset: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bgDark,
       appBar: AppBar(
         title: const Text('Nexus'),
-        backgroundColor: AppTheme.bgPanel,
       ),
-      body: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            color: AppTheme.bgPanel,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(_expiryText, style: TextStyle(color: _expiryColor, fontSize: 14)),
-                Text('니모닉문구 시도 횟수: $_walletCount', style: const TextStyle(color: AppTheme.fg, fontSize: 14)),
-                Row(
-                  children: [
-                    const Text('비밀번호', style: TextStyle(color: AppTheme.fg, fontSize: 14)),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 100,
-                      child: TextField(
-                        controller: _passwordController,
-                        obscureText: true,
-                        style: const TextStyle(color: AppTheme.fg, fontSize: 14),
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                          border: OutlineInputBorder(),
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        child: _currentTabIndex == 0
+            ? _buildAutomationBody()
+            : _buildHistoryBody(),
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentTabIndex,
+        onTap: _onTabChanged,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.play_arrow_rounded), label: '자동화'),
+          BottomNavigationBarItem(icon: Icon(Icons.history_rounded), label: '기록'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAutomationBody() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _expiryText,
+                    style: TextStyle(color: _expiryColor, fontSize: 13, fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '니모닉 시도: $_walletCount회',
+                    style: const TextStyle(color: AppTheme.muted, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Text(
+                        '지갑 비밀번호',
+                        style: TextStyle(color: AppTheme.fg, fontSize: 13, fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          controller: _passwordController,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            hintText: 'Trust Wallet / SafePal 비밀번호',
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
                 // if (_templatePath.isNotEmpty)
                 //   Padding(
                 //     padding: const EdgeInsets.only(top: 4),
@@ -629,133 +716,176 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 //     Text('단계별 캡처/클릭 기록 (log 폴더)', style: TextStyle(color: AppTheme.muted, fontSize: 11)),
                 //   ],
                 // ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    // ElevatedButton(
-                    //   onPressed: _running ? null : _onStart,
-                    //   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accent, foregroundColor: AppTheme.bgDark),
-                    //   child: const Text('시작'),
-                    // ),
-                    ElevatedButton(
-                      onPressed: _running ? null : _onStartSafePal,
-                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accent.withOpacity(0.9), foregroundColor: AppTheme.bgDark),
-                      child: const Text('시작 (SafePal)'),
-                    ),
-                    TextButton(
-                      onPressed: _running ? _onStop : null,
-                      style: TextButton.styleFrom(
-                        backgroundColor: AppTheme.buttonStopBg,
-                        foregroundColor: AppTheme.fg,
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _running ? null : _onStartSafePal,
+                          child: const Text('시작 (SafePal)'),
+                        ),
                       ),
-                      child: const Text('중지'),
-                    ),
-                    // OutlinedButton(
-                    //   onPressed: _onRequestScreenPermission,
-                    //   child: Text(_hasScreenPermission ? '화면 캡처 ✓' : '화면 캡처 권한'),
-                    // ),
-                    // OutlinedButton(
-                    //   onPressed: _onRequestTouchPermission,
-                    //   child: Text(_hasTouchPermission ? '접근성 ✓' : '접근성 권한'),
-                    // ),
-                    // OutlinedButton(
-                    //   onPressed: _running ? null : _onTouchTest,
-                    //   child: const Text('터치 테스트'),
-                    // ),
-                    // OutlinedButton(
-                    //   onPressed: _running ? null : _onCaptureTest,
-                    //   child: const Text('캡처 테스트'),
-                    // ),
-                    // Row(
-                    //   mainAxisSize: MainAxisSize.min,
-                    //   children: [
-                    //     SizedBox(
-                    //       width: 90,
-                    //       child: TextField(
-                    //         controller: _nodeTestController,
-                    //         style: const TextStyle(color: AppTheme.fg, fontSize: 12),
-                    //         decoration: const InputDecoration(
-                    //           isDense: true,
-                    //           contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                    //           border: OutlineInputBorder(),
-                    //         ),
-                    //       ),
-                    //     ),
-                    //     const SizedBox(width: 4),
-                    //     OutlinedButton(
-                    //       onPressed: _running ? null : _onNodeClickTest,
-                    //       child: const Text('노드클릭'),
-                    //     ),
-                    //   ],
-                    // ),
-                    // OutlinedButton(
-                    //   onPressed: _running ? null : _onShowNodeTexts,
-                    //   child: const Text('노드 목록'),
-                    // ),
-                    // OutlinedButton(
-                    //   onPressed: _running ? null : _onShowNodeDetails,
-                    //   child: const Text('노드 상세(선택자)'),
-                    // ),
-                    // Container(
-                    //   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    //   decoration: BoxDecoration(
-                    //     color: _nodeCollectorRunning ? AppTheme.accent.withOpacity(0.2) : null,
-                    //     border: Border.all(color: _nodeCollectorRunning ? AppTheme.accent : Colors.grey, width: 1),
-                    //     borderRadius: BorderRadius.circular(4),
-                    //   ),
-                    //   child: Row(
-                    //     mainAxisSize: MainAxisSize.min,
-                    //     children: [
-                    //       Text('수집: ${_nodeCollectorRunning ? "ON ($_nodeCollectorCount회)" : "OFF"}', style: const TextStyle(fontSize: 11)),
-                    //       const SizedBox(width: 6),
-                    //       TextButton(
-                    //         onPressed: _running ? null : (_nodeCollectorRunning ? _onStopNodeCollector : _onStartNodeCollector),
-                    //         style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: Size.zero),
-                    //         child: Text(_nodeCollectorRunning ? '중지' : '시작', style: const TextStyle(fontSize: 11)),
-                    //       ),
-                    //     ],
-                    //   ),
-                    // ),
-                    // OutlinedButton(
-                    //   onPressed: _running || _nodeCollectorRunning ? null : _onStartSafePalSeedScan,
-                    //   child: const Text('시드 스캔 (SafePal)'),
-                    // ),
-                    // OutlinedButton(
-                    //   onPressed: _running ? null : _onSafePalDeleteTest,
-                    //   child: const Text('삭제 루프 테스트 (SafePal)'),
-                    // ),
-                  ],
-                ),
-              ],
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _running ? _onStop : null,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.fg,
+                            side: BorderSide(color: AppTheme.buttonStopBg),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: const Text('중지'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
-          Expanded(
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: Container(
-              margin: const EdgeInsets.all(8),
-              color: const Color(0xFF1C1C1C),
+              decoration: BoxDecoration(
+                color: AppTheme.bgPanel,
+                borderRadius: BorderRadius.circular(18),
+              ),
               child: ListView.builder(
                 controller: _logController,
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(12),
                 itemCount: _logLines.length,
                 itemBuilder: (_, i) {
                   final line = _logLines[i];
-                  final isRed = line.startsWith('오류') || line.contains('실패') || line.contains('찾을 수 없습니다') || line.contains('권한');
-                  return SelectableText(
-                    line,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      color: isRed ? AppTheme.logRed : AppTheme.accent,
+                  final isRed = line.startsWith('오류') ||
+                      line.contains('실패') ||
+                      line.contains('찾을 수 없습니다') ||
+                      line.contains('권한');
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: SelectableText(
+                      line,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: isRed ? AppTheme.logRed : AppTheme.accent,
+                      ),
                     ),
                   );
                 },
               ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHistoryBody() {
+    final items = _historyItems;
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          color: AppTheme.bgPanel,
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '내가 찾은 시드 히스토리',
+                style: TextStyle(color: AppTheme.fg, fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 2),
+              Text(
+                '※ 잔고가 없는 시드는 24시간 후 자동 삭제됩니다.',
+                style: TextStyle(color: AppTheme.logRed, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Container(
+            margin: const EdgeInsets.all(8),
+            color: const Color(0xFF1C1C1C),
+            child: items.isEmpty && _historyLoading
+                ? const Center(child: CircularProgressIndicator())
+                : items.isEmpty
+                    ? Center(
+                        child: Text(
+                          _historyError ?? '아직 전송된 시드가 없습니다.',
+                          style: const TextStyle(color: AppTheme.muted),
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _historyScrollController,
+                        padding: const EdgeInsets.all(8),
+                        itemCount: items.length + (_historyHasNext ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index >= items.length) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Center(
+                                child: _historyLoading
+                                    ? const CircularProgressIndicator(strokeWidth: 2)
+                                    : const Text('더 불러오는 중...', style: TextStyle(color: AppTheme.muted)),
+                              ),
+                            );
+                          }
+                          final item = items[index];
+                          return Card(
+                            color: const Color(0xFF262626),
+                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            child: ListTile(
+                              onTap: () {
+                                Clipboard.setData(ClipboardData(text: item.phrase));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('시드 문구가 클립보드에 복사되었습니다.'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                              title: Text(
+                                item.phrasePreview,
+                                style: const TextStyle(color: AppTheme.fg, fontSize: 13),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    item.phrase,
+                                    style: const TextStyle(color: AppTheme.muted, fontSize: 11),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${item.source} • ${item.network} • ${item.hasBalance ? "잔고 있음" : "잔고 없음"}',
+                                    style: TextStyle(
+                                      color: item.hasBalance ? AppTheme.accent : AppTheme.muted,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                  if (item.address != null && item.address!.isNotEmpty)
+                                    Text(
+                                      item.address!,
+                                      style: const TextStyle(color: AppTheme.muted, fontSize: 11),
+                                    ),
+                                ],
+                              ),
+                              trailing: Text(
+                                '${item.createdAt.hour.toString().padLeft(2, '0')}:${item.createdAt.minute.toString().padLeft(2, '0')}',
+                                style: const TextStyle(color: AppTheme.muted, fontSize: 11),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ),
+      ],
     );
   }
 }

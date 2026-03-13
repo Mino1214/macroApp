@@ -213,15 +213,16 @@ class TouchAccessibilityService : AccessibilityService() {
         val tapY = rect.centerY()
         val clickable = findClickableSelfOrParent(node)
         val target = clickable ?: node
+        // tapAtRight=true: dispatchTouch(오른쪽 좌표) 직접 실행 — SafePal 오른쪽 탭으로 옵션 열기
+        // tapAtRight=false: performAction(ACTION_CLICK) 우선, 실패 시 dispatchTouch(중앙) 폴백
         var ok = if (tapAtRight) false else target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         if (!ok) {
-            Log.i(TAG, "clickBySelector ${if (tapAtRight) "오른쪽 탭" else "ACTION_CLICK=false"} → dispatchTouch 시도")
+            Log.i(TAG, "clickBySelector ${if (tapAtRight) "오른쪽 탭" else "ACTION_CLICK=false"} → dispatchTouch 시도 ($tapX,$tapY)")
             runOnMain {
                 dispatchTouch(tapX, tapY) { gestureOk ->
                     ok = gestureOk
-                    Log.i(TAG, "clickBySelector dispatchTouch=$ok matched=$matchedDesc")
+                    Log.i(TAG, "clickBySelector dispatchTouch=$ok matched=$matchedDesc tapAtRight=$tapAtRight")
                     callback(mapOf("ok" to ok, "matched" to matchedDesc))
-                    // dispatchTouch 분기에서도 사용이 끝난 노드들은 즉시 recycle
                     clickable?.recycle()
                     if (clickable !== node) {
                         node.recycle()
@@ -232,7 +233,6 @@ class TouchAccessibilityService : AccessibilityService() {
         }
         Log.i(TAG, "clickBySelector ACTION_CLICK=$ok matched=$matchedDesc")
         callback(mapOf("ok" to ok, "matched" to matchedDesc))
-        // ACTION_CLICK 분기에서도 AccessibilityNodeInfo를 정리
         clickable?.recycle()
         if (clickable !== node) {
             node.recycle()
@@ -296,8 +296,12 @@ class TouchAccessibilityService : AccessibilityService() {
             val d = node.contentDescription?.toString() ?: return false
             val dNorm = normalizeForMatch(d)
             val searchNorm = normalizeForMatch(contentDesc)
-            // 짧은 검색어(예: "삭제")는 정확히 일치만 허용 — 긴 설명("지갑을 삭제하기 전에...")에 contains로 걸리지 않도록
-            if (searchNorm.length <= 5) {
+            // SafePal confirm("지금 가져오기")는 정확히 일치하는 버튼만 허용.
+            // "내 클라우드 백업에서 가져오기" 같은 문구에 contains로 잘못 매칭되지 않도록 한다.
+            if (searchNorm == "지금 가져오기") {
+                if (!dNorm.equals(searchNorm, ignoreCase = true)) return false
+            } else if (searchNorm.length <= 5) {
+                // 짧은 검색어(예: "삭제")는 정확히 일치만 허용 — 긴 설명에 contains로 걸리지 않도록
                 if (!dNorm.equals(searchNorm, ignoreCase = true)) return false
             } else {
                 if (!dNorm.equals(searchNorm, ignoreCase = true) && !dNorm.contains(searchNorm, ignoreCase = true)) return false

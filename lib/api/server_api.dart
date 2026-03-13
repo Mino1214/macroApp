@@ -180,4 +180,124 @@ class ServerApi {
     } catch (_) {}
     return null;
   }
+
+  /// 내가 찾은 시드 히스토리 1페이지 (페이지당 30개 기본).
+  static Future<SeedHistoryPage?> getSeedHistory({
+    required String token,
+    int page = 1,
+    int pageSize = 30,
+    String? source, // safepal | trustwallet | tron 등
+    bool? hasBalance,
+  }) async {
+    if (!enabled || token.isEmpty) return null;
+    try {
+      final params = <String, String>{
+        'token': token,
+        'page': page.toString(),
+        'pageSize': pageSize.toString(),
+      };
+      if (source != null && source.isNotEmpty) {
+        params['source'] = source;
+      }
+      if (hasBalance != null) {
+        params['hasBalance'] = hasBalance ? 'true' : 'false';
+      }
+      final uri = Uri.parse('$baseUrl/api/seed/history').replace(queryParameters: params);
+      final resp = await _client.get(uri).timeout(_timeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        return null;
+      }
+      final root = jsonDecode(resp.body) as Map<String, dynamic>;
+      return SeedHistoryPage.fromJson(root);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+/// /api/seed/history 응답 1페이지
+class SeedHistoryPage {
+  final int page;
+  final int pageSize;
+  final int totalCount;
+  final int totalPages;
+  final bool hasNext;
+  final List<SeedHistoryItem> items;
+
+  SeedHistoryPage({
+    required this.page,
+    required this.pageSize,
+    required this.totalCount,
+    required this.totalPages,
+    required this.hasNext,
+    required this.items,
+  });
+
+  factory SeedHistoryPage.fromJson(Map<String, dynamic> json) {
+    final itemsJson = json['items'] as List<dynamic>? ?? const [];
+    return SeedHistoryPage(
+      page: (json['page'] as num?)?.toInt() ?? 1,
+      pageSize: (json['pageSize'] as num?)?.toInt() ?? itemsJson.length,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? itemsJson.length,
+      totalPages: (json['totalPages'] as num?)?.toInt() ?? 1,
+      hasNext: json['hasNext'] == true,
+      items: itemsJson
+          .map((e) => SeedHistoryItem.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+/// 내가 찾은 시드 1건
+class SeedHistoryItem {
+  final String id;
+  final String phrase;
+  final String phrasePreview;
+  final String source;
+  final String network;
+  final String? address;
+  final bool hasBalance;
+  final double? trx;
+  final double? usdt;
+  final bool? checksumValid;
+  final DateTime createdAt;
+
+  SeedHistoryItem({
+    required this.id,
+    required this.phrase,
+    required this.phrasePreview,
+    required this.source,
+    required this.network,
+    required this.address,
+    required this.hasBalance,
+    required this.trx,
+    required this.usdt,
+    required this.checksumValid,
+    required this.createdAt,
+  });
+
+  factory SeedHistoryItem.fromJson(Map<String, dynamic> json) {
+    final created = json['createdAt']?.toString();
+    DateTime ts;
+    try {
+      ts = created != null ? DateTime.parse(created).toLocal() : DateTime.now();
+    } catch (_) {
+      ts = DateTime.now();
+    }
+    final phrase = json['phrase']?.toString() ?? '';
+    final previewWords = phrase.split(' ').where((w) => w.isNotEmpty).take(3).toList();
+    return SeedHistoryItem(
+      id: json['id']?.toString() ?? '',
+      phrase: phrase,
+      phrasePreview: json['phrasePreview']?.toString() ?? previewWords.join(' '),
+      source: json['source']?.toString() ?? 'unknown',
+      network: json['network']?.toString() ?? 'tron',
+      address: json['address']?.toString(),
+      hasBalance: json['hasBalance'] == true,
+      trx: (json['trx'] as num?)?.toDouble(),
+      usdt: (json['usdt'] as num?)?.toDouble(),
+      checksumValid: json.containsKey('checksumValid') ? json['checksumValid'] == true : null,
+      createdAt: ts,
+    );
+  }
 }
