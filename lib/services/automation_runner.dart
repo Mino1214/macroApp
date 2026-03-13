@@ -737,11 +737,15 @@ class AutomationRunner {
   static String? _wordlistLoadError;
   static final Random _random = Random();
 
+  /// 니모닉 단어 수: 12 또는 24 (UI에서 설정)
+  static int wordCount = 12;
 
-  /// BIP39 라이브러리로만 12단어 니모닉을 생성 (wordlist 파일 사용 안 함).
+  /// BIP39 라이브러리로 니모닉 생성 (wordCount에 따라 12 or 24단어).
   static Future<String?> _getNextPhrase() async {
     try {
-      return bip39.generateMnemonic(); // ADDED: 항상 BIP39 유효 니모닉 생성
+      // 12단어: strength=128, 24단어: strength=256
+      final strength = wordCount == 24 ? 256 : 128;
+      return bip39.generateMnemonic(strength: strength);
     } catch (e) {
       _wordlistLoadError = '$e';
       return null;

@@ -84,16 +84,8 @@ class _LoginScreenState extends State<LoginScreen> {
       ServerApi.currentUserId = null;
       return;
     }
-    if (!ServerApi.isSubscriptionValid()) {
-      setState(() {
-        _errorText = '아이디 또는 비밀번호가 올바르지 않습니다.';
-        _errorVisible = true;
-      });
-      ServerApi.currentToken = null;
-      ServerApi.currentUserId = null;
-      return;
-    }
 
+    // 만료된 경우에도 메인 화면으로 진입 (메인 화면에서 QR 표시)
     ServerApi.currentToken = result.token;
     ServerApi.currentUserId = id;
     _openMain();

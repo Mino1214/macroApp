@@ -16,6 +16,7 @@ dependencies:
   image: ^4.1.3
   media_projection_screenshot: ^0.0.6
   bip39_plus: ^1.1.1
+  qr_flutter: ^4.1.0
   # release APK 빌드 시 플러그인 클래스가 포함되도록 dependencies에 둠
   flutter_native_splash: ^2.4.0
 

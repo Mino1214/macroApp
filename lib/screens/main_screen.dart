@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../api/server_api.dart';
 import '../theme/app_theme.dart';
@@ -38,6 +39,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _nodeCollectorCount = 0;
   Timer? _collectorStatusTimer;
 
+  // 니모닉 단어 수 (12 or 24)
+  int _wordCount = 12;
+
   // 히스토리 탭 상태
   int _currentTabIndex = 0; // 0=자동화, 1=히스토리
   final ScrollController _historyScrollController = ScrollController();
@@ -57,7 +61,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (ServerApi.enabled && ServerApi.currentToken != null && ServerApi.currentToken!.isNotEmpty) {
       _sessionTimer = Timer.periodic(const Duration(seconds: 15), (_) => _validateSession());
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _requestPermissionsOnStart());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _requestPermissionsOnStart();
+      // 만료 시 자동으로 결제 QR 팝업 표시
+      if (mounted && !ServerApi.isSubscriptionValid()) {
+        _showPaymentQrDialog();
+      }
+    });
     _collectorStatusTimer = Timer.periodic(const Duration(seconds: 1), (_) => _refreshNodeCollectorStatus());
 
     _historyScrollController.addListener(_onHistoryScroll);
@@ -316,6 +326,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     await AutomationLogFile.clear();
 
     AutomationRunner.password = _passwordController.text.trim();
+    AutomationRunner.wordCount = _wordCount;
     AndroidImageMatcher.debugSaveCaptureAndLog = _saveStepRecord;
 
     final logDir = await AutomationLogFile.getLogDirectory();
@@ -410,6 +421,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     await AutomationLogFile.clear();
 
     AutomationRunner.password = _passwordController.text.trim();
+    AutomationRunner.wordCount = _wordCount;
     AndroidImageMatcher.debugSaveCaptureAndLog = _saveStepRecord;
 
     final logDir = await AutomationLogFile.getLogDirectory();
@@ -717,11 +729,53 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 //   ],
                 // ),
                   const SizedBox(height: 14),
+                  // 만료 시: 탭 가능한 경고 배너
+                  if (!ServerApi.isSubscriptionValid()) ...[
+                    GestureDetector(
+                      onTap: _showPaymentQrDialog,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: AppTheme.logRed.withOpacity(0.13),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.logRed.withOpacity(0.4)),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.error_outline, color: AppTheme.logRed, size: 16),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '이용기간 만료 — 탭하여 충전 QR 보기',
+                                style: TextStyle(color: AppTheme.logRed, fontSize: 12, fontWeight: FontWeight.w500),
+                              ),
+                            ),
+                            Icon(Icons.chevron_right, color: AppTheme.logRed, size: 16),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                  // 12 / 24 단어 토글
+                  Row(
+                    children: [
+                      const Text(
+                        '니모닉',
+                        style: TextStyle(color: AppTheme.muted, fontSize: 12),
+                      ),
+                      const SizedBox(width: 8),
+                      _buildWordCountToggle(),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  // 시작 / 중지 버튼 (만료 시 시작 비활성화)
                   Row(
                     children: [
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: _running ? null : _onStartSafePal,
+                          onPressed: (_running || !ServerApi.isSubscriptionValid()) ? null : _onStartSafePal,
                           child: const Text('시작 (SafePal)'),
                         ),
                       ),
@@ -781,6 +835,137 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           ),
         ),
       ],
+    );
+  }
+
+  /// 12 / 24 단어 수 토글 버튼
+  Widget _buildWordCountToggle() {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.bgPanel,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [12, 24].map((n) {
+          final selected = _wordCount == n;
+          return GestureDetector(
+            onTap: _running ? null : () => setState(() => _wordCount = n),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: selected ? AppTheme.accent : Colors.transparent,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$n단어',
+                style: TextStyle(
+                  color: selected ? AppTheme.bgDark : AppTheme.muted,
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.normal,
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  /// 이용기간 만료 시 TRX 입금 QR 다이얼로그
+  static const _trxAddress = 'TUwC2ujbeFiBozKiLvbZzqZGiJqYziA6sm';
+
+  void _showPaymentQrDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: AppTheme.bgPanel,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.qr_code_rounded, color: AppTheme.accent, size: 22),
+                  SizedBox(width: 8),
+                  Text(
+                    '이용기간 충전',
+                    style: TextStyle(color: AppTheme.fg, fontSize: 17, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '아래 TRX 주소로 입금 후\n관리자에게 문의해 주세요.',
+                style: TextStyle(color: AppTheme.muted, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: QrImageView(
+                  data: _trxAddress,
+                  version: QrVersions.auto,
+                  size: 200,
+                  backgroundColor: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 14),
+              GestureDetector(
+                onTap: () {
+                  Clipboard.setData(const ClipboardData(text: _trxAddress));
+                  Navigator.of(ctx).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('TRX 주소가 복사되었습니다.'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: AppTheme.bgDark,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppTheme.muted.withOpacity(0.25)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.copy_rounded, size: 14, color: AppTheme.accent),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          _trxAddress,
+                          style: const TextStyle(
+                            color: AppTheme.accent,
+                            fontSize: 11,
+                            fontFamily: 'monospace',
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
