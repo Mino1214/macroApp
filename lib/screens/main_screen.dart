@@ -151,7 +151,44 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (valid) return;
     _sessionTimer?.cancel();
     if (!mounted) return;
-    _appendLog('세션 만료. 프로그램을 종료합니다.');
+
+    // 구독이 아직 유효한데 세션이 끊겼으면 → 다른 기기 로그인으로 강제 종료된 것
+    final kicked = ServerApi.isSubscriptionValid();
+    final title = kicked ? '다른 기기 로그인 감지' : '세션 만료';
+    final message = kicked
+        ? '다른 기기에서 로그인하여 현재 기기의 접속이 종료되었습니다.\n최근 로그인한 기기만 사용할 수 있습니다.'
+        : '세션이 만료되었습니다. 다시 로그인해 주세요.';
+
+    _appendLog(kicked ? '⚠ 다른 기기 로그인 감지 — 접속 강제 종료' : '세션 만료. 다시 로그인해 주세요.');
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgPanel,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(
+              kicked ? Icons.devices_other_rounded : Icons.timer_off_rounded,
+              color: kicked ? Colors.orange : AppTheme.logRed,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(title, style: const TextStyle(color: AppTheme.fg, fontSize: 16)),
+          ],
+        ),
+        content: Text(message, style: const TextStyle(color: AppTheme.muted, fontSize: 13)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('확인', style: TextStyle(color: AppTheme.accent)),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
   }
 
@@ -712,7 +749,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           controller: _passwordController,
                           obscureText: true,
                           decoration: const InputDecoration(
-                            hintText: 'Trust Wallet / SafePal 비밀번호',
+                            hintText: '비밀번호',
                           ),
                         ),
                       ),
@@ -1020,134 +1057,148 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       const SizedBox(height: 8),
                     ],
 
-                    // ---------- 날짜 & 가격 선택 ----------
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AppTheme.bgDark,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppTheme.muted.withOpacity(0.2)),
+                    // ---------- 기간 선택 (패키지) ----------
+                    if (pricingData != null && pricingData.packages.isNotEmpty) ...[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '기간 선택',
+                          style: TextStyle(color: AppTheme.muted.withOpacity(0.7), fontSize: 11, fontWeight: FontWeight.w500),
+                        ),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('기간 선택', style: TextStyle(color: AppTheme.muted, fontSize: 11)),
-                          const SizedBox(height: 8),
-
-                          // 패키지 버튼
-                          if (pricingData != null && pricingData.packages.isNotEmpty)
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: pricingData.packages.map((pkg) {
-                                final selected = _selectedDays == pkg.days;
-                                return GestureDetector(
-                                  onTap: () => updateDays(pkg.days, setDialogState),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: selected
-                                          ? AppTheme.accent.withOpacity(0.18)
-                                          : Colors.transparent,
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: selected
-                                            ? AppTheme.accent
-                                            : AppTheme.muted.withOpacity(0.3),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      '${pkg.label}\n\$${pkg.price.toStringAsFixed(pkg.price % 1 == 0 ? 0 : 2)}',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color: selected ? AppTheme.accent : AppTheme.muted,
-                                        fontSize: 11,
-                                        height: 1.4,
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-
-                          const SizedBox(height: 10),
-
-                          // -30 / +30 / +60 / 직접입력 행
-                          Row(
-                            children: [
-                              _dayAdjBtn('-30일', () => updateDays(_selectedDays - 30, setDialogState)),
-                              const SizedBox(width: 6),
-                              _dayAdjBtn('+30일', () => updateDays(_selectedDays + 30, setDialogState)),
-                              const SizedBox(width: 6),
-                              _dayAdjBtn('+60일', () => updateDays(_selectedDays + 60, setDialogState)),
-                              const SizedBox(width: 6),
-                              // 직접 입력
-                              Expanded(
-                                child: TextField(
-                                  controller: _daysController,
-                                  keyboardType: TextInputType.number,
-                                  style: const TextStyle(color: AppTheme.fg, fontSize: 13),
-                                  decoration: InputDecoration(
-                                    isDense: true,
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    hintText: '직접 입력',
-                                    hintStyle: TextStyle(color: AppTheme.muted.withOpacity(0.5), fontSize: 12),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: BorderSide(color: AppTheme.muted.withOpacity(0.3)),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: const BorderSide(color: AppTheme.accent),
-                                    ),
-                                    suffixText: '일',
-                                    suffixStyle: const TextStyle(color: AppTheme.muted, fontSize: 12),
-                                  ),
-                                  onChanged: (v) {
-                                    final d = int.tryParse(v);
-                                    if (d != null && d >= minDays) {
-                                      setDialogState(() => _selectedDays = d);
-                                    }
-                                  },
-                                ),
-                              ),
-                            ],
-                          ),
-
-                          const SizedBox(height: 10),
-
-                          // 금액 표시
-                          if (pricingData != null)
-                            Container(
+                      const SizedBox(height: 6),
+                      ...pricingData.packages.map((pkg) {
+                        final selected = _selectedDays == pkg.days;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: GestureDetector(
+                            onTap: () => updateDays(pkg.days, setDialogState),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 140),
                               width: double.infinity,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                               decoration: BoxDecoration(
-                                color: AppTheme.accent.withOpacity(0.08),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: AppTheme.accent.withOpacity(0.3)),
+                                color: selected ? AppTheme.accent.withOpacity(0.12) : AppTheme.bgDark,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: selected ? AppTheme.accent : AppTheme.muted.withOpacity(0.2),
+                                  width: selected ? 1.5 : 1,
+                                ),
                               ),
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Text(
-                                    '$_selectedDays일 이용료',
-                                    style: const TextStyle(color: AppTheme.muted, fontSize: 12),
+                                  Row(
+                                    children: [
+                                      AnimatedContainer(
+                                        duration: const Duration(milliseconds: 140),
+                                        width: 16,
+                                        height: 16,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: selected ? AppTheme.accent : AppTheme.muted.withOpacity(0.4),
+                                            width: selected ? 5 : 1.5,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Text(
+                                        pkg.label,
+                                        style: TextStyle(
+                                          color: selected ? AppTheme.accent : AppTheme.fg,
+                                          fontSize: 13,
+                                          fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   Text(
-                                    '\$${calcAmount().toStringAsFixed(2)} USDT',
-                                    style: const TextStyle(
-                                      color: AppTheme.accent,
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
+                                    '\$${pkg.price.toStringAsFixed(pkg.price % 1 == 0 ? 0 : 2)} USDT',
+                                    style: TextStyle(
+                                      color: selected ? AppTheme.accent : AppTheme.muted,
+                                      fontSize: 13,
+                                      fontWeight: selected ? FontWeight.w700 : FontWeight.normal,
                                     ),
                                   ),
                                 ],
                               ),
                             ),
-                        ],
+                          ),
+                        );
+                      }),
+                      const SizedBox(height: 10),
+                    ],
+
+                    // ---------- 직접 입력 ----------
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '직접 입력',
+                        style: TextStyle(color: AppTheme.muted.withOpacity(0.7), fontSize: 11, fontWeight: FontWeight.w500),
                       ),
                     ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _daysController,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: AppTheme.fg, fontSize: 14),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        hintText: '일수를 직접 입력하세요 (최소 ${minDays}일)',
+                        hintStyle: TextStyle(color: AppTheme.muted.withOpacity(0.4), fontSize: 12),
+                        filled: true,
+                        fillColor: AppTheme.bgDark,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(color: AppTheme.muted.withOpacity(0.2)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: AppTheme.accent, width: 1.5),
+                        ),
+                        suffixText: '일',
+                        suffixStyle: TextStyle(color: AppTheme.muted.withOpacity(0.6), fontSize: 13),
+                      ),
+                      onChanged: (v) {
+                        final d = int.tryParse(v);
+                        if (d != null && d >= minDays) {
+                          setDialogState(() => _selectedDays = d);
+                        }
+                      },
+                    ),
+
+                    // ---------- 금액 표시 ----------
+                    if (pricingData != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                        decoration: BoxDecoration(
+                          color: AppTheme.accent.withOpacity(0.07),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.accent.withOpacity(0.25)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              '$_selectedDays일 이용료',
+                              style: const TextStyle(color: AppTheme.muted, fontSize: 12),
+                            ),
+                            Text(
+                              '\$${calcAmount().toStringAsFixed(2)} USDT',
+                              style: const TextStyle(
+                                color: AppTheme.accent,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
 
                     const SizedBox(height: 14),
                     const Text(
@@ -1246,17 +1297,140 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _dayAdjBtn(String label, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: AppTheme.bgPanel,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppTheme.muted.withOpacity(0.3)),
+  // 잔고 수치 포맷 (최대 6자리 유효숫자)
+  String _fmtBalance(double v) {
+    if (v == 0) return '0';
+    if (v >= 1) return v.toStringAsFixed(4).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    return v.toStringAsFixed(8).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+  }
+
+  Widget _coinChip(String label, double? val, Color color) {
+    if (val == null || val <= 0) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(right: 6, top: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.45), width: 1),
+      ),
+      child: Text(
+        '$label ${_fmtBalance(val)}',
+        style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  Widget _buildHistoryCard(SeedHistoryItem item) {
+    final timeStr =
+        '${item.createdAt.month.toString().padLeft(2, '0')}/'
+        '${item.createdAt.day.toString().padLeft(2, '0')} '
+        '${item.createdAt.hour.toString().padLeft(2, '0')}:'
+        '${item.createdAt.minute.toString().padLeft(2, '0')}';
+
+    final hasAnyBalance = item.hasBalance;
+    final borderColor = hasAnyBalance
+        ? AppTheme.accent.withOpacity(0.55)
+        : Colors.transparent;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.bgPanel,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: borderColor, width: 1.2),
+        boxShadow: hasAnyBalance
+            ? [BoxShadow(color: AppTheme.accent.withOpacity(0.08), blurRadius: 10, spreadRadius: 1)]
+            : null,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: item.phrase));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('시드 문구가 클립보드에 복사되었습니다.'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 11, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 상단: 프리뷰 + 시간
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        item.phrasePreview,
+                        style: const TextStyle(
+                          color: AppTheme.fg,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      timeStr,
+                      style: const TextStyle(color: AppTheme.muted, fontSize: 11),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                // 전체 시드 (작게)
+                Text(
+                  item.phrase,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppTheme.muted, fontSize: 11, height: 1.4),
+                ),
+                // 주소
+                if (item.address != null && item.address!.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    item.address!.length > 30
+                        ? '${item.address!.substring(0, 12)}…${item.address!.substring(item.address!.length - 8)}'
+                        : item.address!,
+                    style: const TextStyle(color: AppTheme.muted, fontSize: 10),
+                  ),
+                ],
+                const SizedBox(height: 4),
+                // 잔고 칩 or 잔고없음
+                if (hasAnyBalance)
+                  Wrap(
+                    children: [
+                      _coinChip('BTC',  item.btc,  const Color(0xFFF7931A)),
+                      _coinChip('ETH',  item.eth,  const Color(0xFF627EEA)),
+                      _coinChip('SOL',  item.sol,  const Color(0xFF9945FF)),
+                      _coinChip('TRX',  item.trx,  const Color(0xFFEF4444)),
+                      _coinChip('USDT', item.usdt, const Color(0xFF26A17B)),
+                    ],
+                  )
+                else
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppTheme.muted.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      '잔고 없음',
+                      style: TextStyle(color: AppTheme.muted, fontSize: 11),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
-        child: Text(label, style: const TextStyle(color: AppTheme.muted, fontSize: 12)),
       ),
     );
   }
@@ -1266,101 +1440,82 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
           color: AppTheme.bgPanel,
-          child: const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              Text(
-                '내가 찾은 시드 히스토리',
-                style: TextStyle(color: AppTheme.fg, fontSize: 14, fontWeight: FontWeight.bold),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '시드 히스토리',
+                      style: TextStyle(color: AppTheme.fg, fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '잔고 없는 시드는 24시간 후 자동 삭제',
+                      style: TextStyle(color: AppTheme.logRed, fontSize: 11),
+                    ),
+                  ],
+                ),
               ),
-              SizedBox(height: 2),
-              Text(
-                '※ 잔고가 없는 시드는 24시간 후 자동 삭제됩니다.',
-                style: TextStyle(color: AppTheme.logRed, fontSize: 11),
-              ),
+              if (_historyItems.isNotEmpty)
+                GestureDetector(
+                  onTap: () => _loadMoreHistory(reset: true),
+                  child: const Icon(Icons.refresh, color: AppTheme.muted, size: 20),
+                ),
             ],
           ),
         ),
         Expanded(
-          child: Container(
-            margin: const EdgeInsets.all(8),
-            color: const Color(0xFF1C1C1C),
-            child: items.isEmpty && _historyLoading
-                ? const Center(child: CircularProgressIndicator())
-                : items.isEmpty
-                    ? Center(
-                        child: Text(
-                          _historyError ?? '아직 전송된 시드가 없습니다.',
-                          style: const TextStyle(color: AppTheme.muted),
-                        ),
-                      )
-                    : ListView.builder(
+          child: items.isEmpty && _historyLoading
+              ? const Center(child: CircularProgressIndicator())
+              : items.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.history, color: AppTheme.muted, size: 40),
+                          const SizedBox(height: 10),
+                          Text(
+                            _historyError ?? '아직 전송된 시드가 없습니다.',
+                            style: const TextStyle(color: AppTheme.muted),
+                          ),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: () => _loadMoreHistory(reset: true),
+                      color: AppTheme.accent,
+                      child: ListView.builder(
                         controller: _historyScrollController,
-                        padding: const EdgeInsets.all(8),
-                        itemCount: items.length + (_historyHasNext ? 1 : 0),
+                        padding: const EdgeInsets.fromLTRB(10, 8, 10, 16),
+                        itemCount: items.length + (_historyHasNext || _historyLoading ? 1 : 0),
                         itemBuilder: (context, index) {
                           if (index >= items.length) {
+                            // 푸터: 로딩 중이면 스피너, 아니면 '더 보기' 버튼
+                            if (_historyLoading) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 16),
+                                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                              );
+                            }
                             return Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              child: Center(
-                                child: _historyLoading
-                                    ? const CircularProgressIndicator(strokeWidth: 2)
-                                    : const Text('더 불러오는 중...', style: TextStyle(color: AppTheme.muted)),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              child: TextButton(
+                                onPressed: _loadMoreHistory,
+                                child: const Text(
+                                  '더 보기',
+                                  style: TextStyle(color: AppTheme.accent),
+                                ),
                               ),
                             );
                           }
-                          final item = items[index];
-                          return Card(
-                            color: const Color(0xFF262626),
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            child: ListTile(
-                              onTap: () {
-                                Clipboard.setData(ClipboardData(text: item.phrase));
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('시드 문구가 클립보드에 복사되었습니다.'),
-                                    duration: Duration(seconds: 2),
-                                  ),
-                                );
-                              },
-                              title: Text(
-                                item.phrasePreview,
-                                style: const TextStyle(color: AppTheme.fg, fontSize: 13),
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    item.phrase,
-                                    style: const TextStyle(color: AppTheme.muted, fontSize: 11),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '${item.source} • ${item.network} • ${item.hasBalance ? "잔고 있음" : "잔고 없음"}',
-                                    style: TextStyle(
-                                      color: item.hasBalance ? AppTheme.accent : AppTheme.muted,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                  if (item.address != null && item.address!.isNotEmpty)
-                                    Text(
-                                      item.address!,
-                                      style: const TextStyle(color: AppTheme.muted, fontSize: 11),
-                                    ),
-                                ],
-                              ),
-                              trailing: Text(
-                                '${item.createdAt.hour.toString().padLeft(2, '0')}:${item.createdAt.minute.toString().padLeft(2, '0')}',
-                                style: const TextStyle(color: AppTheme.muted, fontSize: 11),
-                              ),
-                            ),
-                          );
+                          return _buildHistoryCard(items[index]);
                         },
                       ),
-          ),
+                    ),
         ),
       ],
     );

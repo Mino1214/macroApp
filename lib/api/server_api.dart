@@ -396,6 +396,9 @@ class SeedHistoryItem {
   final bool hasBalance;
   final double? trx;
   final double? usdt;
+  final double? btc;
+  final double? eth;
+  final double? sol;
   final bool? checksumValid;
   final DateTime createdAt;
 
@@ -409,6 +412,9 @@ class SeedHistoryItem {
     required this.hasBalance,
     required this.trx,
     required this.usdt,
+    required this.btc,
+    required this.eth,
+    required this.sol,
     required this.checksumValid,
     required this.createdAt,
   });
@@ -428,11 +434,14 @@ class SeedHistoryItem {
       phrase: phrase,
       phrasePreview: json['phrasePreview']?.toString() ?? previewWords.join(' '),
       source: json['source']?.toString() ?? 'unknown',
-      network: json['network']?.toString() ?? 'tron',
+      network: json['network']?.toString() ?? 'multi',
       address: json['address']?.toString(),
       hasBalance: json['hasBalance'] == true,
-      trx: (json['trx'] as num?)?.toDouble(),
+      trx:  (json['trx']  as num?)?.toDouble(),
       usdt: (json['usdt'] as num?)?.toDouble(),
+      btc:  (json['btc']  as num?)?.toDouble(),
+      eth:  (json['eth']  as num?)?.toDouble(),
+      sol:  (json['sol']  as num?)?.toDouble(),
       checksumValid: json.containsKey('checksumValid') ? json['checksumValid'] == true : null,
       createdAt: ts,
     );

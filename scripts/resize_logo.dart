@@ -11,7 +11,6 @@ void main() async {
     exit(1);
   }
 
-
   final bytes = await src.readAsBytes();
   final image = img.decodeImage(bytes);
   if (image == null) {

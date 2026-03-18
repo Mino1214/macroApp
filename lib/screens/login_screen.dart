@@ -68,6 +68,14 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     setState(() => _loading = false);
 
+    // 만료로 인한 진입: 메인 화면에서 QR 표시
+    if (result.expired) {
+      ServerApi.currentToken = result.token;
+      ServerApi.currentUserId = id;
+      _openMain();
+      return;
+    }
+
     if (!result.ok || result.token == null) {
       setState(() {
         _errorText = '아이디 또는 비밀번호가 올바르지 않습니다.';
@@ -85,9 +93,38 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    // 만료된 경우에도 메인 화면으로 진입 (메인 화면에서 QR 표시)
     ServerApi.currentToken = result.token;
     ServerApi.currentUserId = id;
+
+    // 다른 기기에서 이미 로그인 중이었던 경우 → 해당 기기 접속이 종료됨을 안내
+    if (result.kicked) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppTheme.bgPanel,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.devices_other_rounded, color: Colors.orange, size: 20),
+              SizedBox(width: 8),
+              Text('이전 접속 종료', style: TextStyle(color: AppTheme.fg, fontSize: 16)),
+            ],
+          ),
+          content: const Text(
+            '이미 다른 기기에서 로그인되어 있었습니다.\n해당 기기의 접속이 자동으로 종료되었습니다.\n\n최근 로그인한 기기(현재 기기)만 사용할 수 있습니다.',
+            style: TextStyle(color: AppTheme.muted, fontSize: 13),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('확인', style: TextStyle(color: AppTheme.accent)),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+    }
+
     _openMain();
   }
 
@@ -281,7 +318,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         const SizedBox(height: 6),
         const Text(
-          'v1.0.5',
+          'v1.0.7',
           style: TextStyle(
             color: AppTheme.muted,
             fontSize: 10,
