@@ -137,15 +137,43 @@ class ServerApi {
   }
 
   /// GET /api/session/validate?token=
-  static Future<bool> validateSessionAsync(String token) async {
-    if (!enabled || token.isEmpty) return true;
+  /// 반환: (valid, kicked) — kicked=true 는 다른 기기 로그인으로 강제 종료된 경우에만 true
+  static Future<({bool valid, bool kicked})> validateSessionAsync(String token) async {
+    if (!enabled || token.isEmpty) return (valid: true, kicked: false);
     try {
       final resp = await _client
           .get(Uri.parse('$baseUrl/api/session/validate?token=${Uri.encodeComponent(token)}'))
           .timeout(_timeout);
-      return resp.statusCode >= 200 && resp.statusCode < 300;
+      if (resp.statusCode >= 200 && resp.statusCode < 300) {
+        return (valid: true, kicked: false);
+      }
+      // 서버가 kicked: true 를 명시적으로 반환한 경우에만 kicked
+      try {
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        final kicked = body['kicked'] == true;
+        return (valid: false, kicked: kicked);
+      } catch (_) {
+        return (valid: false, kicked: false);
+      }
     } catch (_) {
-      return false;
+      // 네트워크 오류 → 세션을 유효한 것으로 취급 (오프라인 허용)
+      return (valid: true, kicked: false);
+    }
+  }
+
+  /// POST /api/logout — 앱 종료 시 서버 세션 명시적 삭제
+  static Future<void> logoutAsync(String token) async {
+    if (!enabled || token.isEmpty) return;
+    try {
+      await _client
+          .post(
+            Uri.parse('$baseUrl/api/logout'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'token': token}),
+          )
+          .timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // fire-and-forget: 실패해도 무시
     }
   }
 

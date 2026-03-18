@@ -51,6 +51,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _historyLoading = false;
   String? _historyError;
 
+  // 앱 백그라운드 전환 시 세션 자동 종료 타이머 (5분 후)
+  Timer? _bgLogoutTimer;
+
   // 개인 입금주소 상태
   String? _depositAddress;
   bool _depositAddressLoading = false;
@@ -147,13 +150,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<void> _validateSession() async {
     final token = ServerApi.currentToken;
     if (token == null || token.isEmpty) return;
-    final valid = await ServerApi.validateSessionAsync(token);
-    if (valid) return;
+    final result = await ServerApi.validateSessionAsync(token);
+    if (result.valid) return;
     _sessionTimer?.cancel();
     if (!mounted) return;
 
-    // 구독이 아직 유효한데 세션이 끊겼으면 → 다른 기기 로그인으로 강제 종료된 것
-    final kicked = ServerApi.isSubscriptionValid();
+    // 서버에서 명시적으로 kicked 를 반환한 경우에만 "다른 기기 로그인"으로 처리
+    final kicked = result.kicked;
     final title = kicked ? '다른 기기 로그인 감지' : '세션 만료';
     final message = kicked
         ? '다른 기기에서 로그인하여 현재 기기의 접속이 종료되었습니다.\n최근 로그인한 기기만 사용할 수 있습니다.'
@@ -557,15 +560,36 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     setState(() => _running = false);
   }
 
+  // 앱 종료 또는 5분 이상 백그라운드 → 서버 세션 삭제 (재로그인 시 false-positive 방지)
+  void _autoLogout() {
+    final token = ServerApi.currentToken;
+    if (token != null && token.isNotEmpty) {
+      ServerApi.logoutAsync(token); // fire-and-forget
+      ServerApi.currentToken = null;
+      ServerApi.currentUserId = null;
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _bgLogoutTimer?.cancel();
+      _bgLogoutTimer = null;
       _checkPermissions();
+    } else if (state == AppLifecycleState.paused) {
+      // 백그라운드 진입 → 5분 후 세션 자동 종료
+      _bgLogoutTimer?.cancel();
+      _bgLogoutTimer = Timer(const Duration(minutes: 5), _autoLogout);
+    } else if (state == AppLifecycleState.detached) {
+      // 앱 완전 종료 → 즉시 세션 삭제
+      _bgLogoutTimer?.cancel();
+      _autoLogout();
     }
   }
 
   @override
   void dispose() {
+    _bgLogoutTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _sessionTimer?.cancel();
     _collectorStatusTimer?.cancel();
