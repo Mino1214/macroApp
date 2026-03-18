@@ -1146,10 +1146,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 6),
                           child: GestureDetector(
-                            onTap: () {
-                              updateDays(pkg.days, setDialogState);
-                              setDialogState(() => qrVisible = true);
-                            },
+                            onTap: () => updateDays(pkg.days, setDialogState),
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 140),
                               width: double.infinity,
@@ -1241,7 +1238,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       onChanged: (v) {
                         final d = int.tryParse(v);
                         if (d != null && d >= minDays) {
-                          setDialogState(() => _selectedDays = d);
+                          setDialogState(() {
+                            _selectedDays = d;
+                            qrVisible = false; // 일수 바꾸면 QR 숨김 (재신청 필요)
+                          });
                         }
                       },
                     ),
@@ -1277,44 +1277,47 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       ),
                     ],
 
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 16),
 
-                    // QR 영역 — 일수 선택 전 안내, 선택 후 QR 표시
-                    if (!qrVisible)
-                      Container(
+                    // ── 입금 신청 버튼 (QR 미표시 상태에서만) ──
+                    if (!qrVisible) ...[
+                      SizedBox(
                         width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        decoration: BoxDecoration(
-                          color: AppTheme.bgDark,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppTheme.muted.withOpacity(0.15)),
+                        child: ElevatedButton.icon(
+                          onPressed: () => setDialogState(() => qrVisible = true),
+                          icon: const Icon(Icons.qr_code_rounded, size: 18),
+                          label: Text(
+                            '입금 신청  (\$${ calcAmount().toStringAsFixed(2)} USDT)',
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                          ),
                         ),
-                        child: Column(
-                          children: [
-                            Icon(Icons.touch_app_rounded, color: AppTheme.muted.withOpacity(0.5), size: 32),
-                            const SizedBox(height: 8),
-                            Text(
-                              '위에서 기간을 선택하면\n입금 QR이 표시됩니다',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: AppTheme.muted.withOpacity(0.6), fontSize: 12, height: 1.5),
-                            ),
-                          ],
-                        ),
-                      )
-                    else ...[
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: () {
+                          paymentPollingTimer?.cancel();
+                          Navigator.of(ctx).pop();
+                        },
+                        child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
+                      ),
+                    ],
+
+                    // ── QR + 주소 복사 (입금 신청 후) ──
+                    if (qrVisible) ...[
                       const Text(
-                        'TRC20 USDT 개인 입금주소로 송금하면\n자동으로 구독 기간이 연장됩니다.',
+                        'TRC20 USDT 개인 입금주소로 정확한 금액을 송금하면\n자동으로 구독 기간이 연장됩니다.',
                         style: TextStyle(color: AppTheme.muted, fontSize: 11),
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 12),
+
                       if (loading)
                         const SizedBox(
                           height: 180,
                           child: Center(child: CircularProgressIndicator(color: AppTheme.accent)),
                         )
                       else if (error != null)
-                        Container(
+                        Padding(
                           padding: const EdgeInsets.all(12),
                           child: Text(
                             error,
@@ -1322,7 +1325,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                             textAlign: TextAlign.center,
                           ),
                         )
-                      else if (address != null && address.isNotEmpty)
+                      else if (address != null && address.isNotEmpty) ...[
+                        // QR 코드
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
@@ -1336,60 +1340,70 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                             backgroundColor: Colors.white,
                           ),
                         ),
-                    ],
+                        const SizedBox(height: 12),
 
-                    const SizedBox(height: 12),
-
-                    // 주소 복사 버튼
-                    if (address != null && address.isNotEmpty && !loading)
-                      GestureDetector(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: address));
-                          Navigator.of(ctx).pop();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('입금주소가 복사되었습니다.'),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                        },
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                          decoration: BoxDecoration(
-                            color: AppTheme.bgDark,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: AppTheme.muted.withOpacity(0.25)),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.copy_rounded, size: 14, color: AppTheme.accent),
-                              const SizedBox(width: 6),
-                              Flexible(
-                                child: Text(
-                                  address,
-                                  style: const TextStyle(
-                                    color: AppTheme.accent,
-                                    fontSize: 11,
-                                    fontFamily: 'monospace',
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                        // 주소 복사 버튼
+                        GestureDetector(
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: address));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('입금주소가 복사되었습니다.'),
+                                duration: Duration(seconds: 2),
                               ),
-                            ],
+                            );
+                          },
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                            decoration: BoxDecoration(
+                              color: AppTheme.bgDark,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: AppTheme.accent.withOpacity(0.35)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.copy_rounded, size: 14, color: AppTheme.accent),
+                                const SizedBox(width: 6),
+                                Flexible(
+                                  child: Text(
+                                    address,
+                                    style: const TextStyle(
+                                      color: AppTheme.accent,
+                                      fontSize: 11,
+                                      fontFamily: 'monospace',
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
+                      ],
 
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed: () {
-                        paymentPollingTimer?.cancel();
-                        Navigator.of(ctx).pop();
-                      },
-                      child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
-                    ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextButton(
+                              onPressed: () => setDialogState(() => qrVisible = false),
+                              child: const Text('← 기간 변경', style: TextStyle(color: AppTheme.muted, fontSize: 12)),
+                            ),
+                          ),
+                          Expanded(
+                            child: TextButton(
+                              onPressed: () {
+                                paymentPollingTimer?.cancel();
+                                Navigator.of(ctx).pop();
+                              },
+                              child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
