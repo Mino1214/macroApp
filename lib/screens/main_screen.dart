@@ -962,11 +962,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             return pricingData.calcPrice(_selectedDays);
           }
 
+          const int minDays = 30;
+
           void updateDays(int days, StateSetter ss) {
-            if (days < 1) return;
+            final clamped = days < minDays ? minDays : days;
             ss(() {
-              _selectedDays = days;
-              _daysController.text = days.toString();
+              _selectedDays = clamped;
+              _daysController.text = clamped.toString();
             });
           }
 
@@ -1071,9 +1073,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
                           const SizedBox(height: 10),
 
-                          // +30 / +60 / 직접입력 행
+                          // -30 / +30 / +60 / 직접입력 행
                           Row(
                             children: [
+                              _dayAdjBtn('-30일', () => updateDays(_selectedDays - 30, setDialogState)),
+                              const SizedBox(width: 6),
                               _dayAdjBtn('+30일', () => updateDays(_selectedDays + 30, setDialogState)),
                               const SizedBox(width: 6),
                               _dayAdjBtn('+60일', () => updateDays(_selectedDays + 60, setDialogState)),
@@ -1102,7 +1106,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                   ),
                                   onChanged: (v) {
                                     final d = int.tryParse(v);
-                                    if (d != null && d > 0) {
+                                    if (d != null && d >= minDays) {
                                       setDialogState(() => _selectedDays = d);
                                     }
                                   },
