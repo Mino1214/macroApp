@@ -190,7 +190,11 @@ class ServerApi {
     String network = 'TRON',
     String tokenType = 'USDT',
   }) async {
-    if (!enabled || token.isEmpty) return null;
+    if (!enabled || token.isEmpty) {
+      // ignore: avoid_print
+      print('[API] requestDepositAddress 스킵 ▶ enabled=$enabled tokenEmpty=${token.isEmpty}');
+      return null;
+    }
     try {
       final body = jsonEncode({
         'token': token,
@@ -199,6 +203,8 @@ class ServerApi {
         'network': network,
         'tokenType': tokenType,
       });
+      // ignore: avoid_print
+      print('[API] POST /api/payment/request-address ▶ userId=$userId');
       final resp = await _client
           .post(
             Uri.parse('$baseUrl/api/payment/request-address'),
@@ -206,10 +212,14 @@ class ServerApi {
             body: body,
           )
           .timeout(_timeout);
+      // ignore: avoid_print
+      print('[API] 응답 status=${resp.statusCode} body=${resp.body}');
       if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
       final root = jsonDecode(resp.body) as Map<String, dynamic>;
       return DepositAddressResult.fromJson(root);
-    } catch (_) {
+    } catch (e) {
+      // ignore: avoid_print
+      print('[API] requestDepositAddress 예외 ▶ $e');
       return null;
     }
   }

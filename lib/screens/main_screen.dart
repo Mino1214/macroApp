@@ -899,6 +899,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     final token = ServerApi.currentToken ?? '';
     final userId = ServerApi.currentUserId ?? '';
+    // ignore: avoid_print
+    print('[QR] 주소 요청 시작 ▶ userId=$userId hasToken=${token.isNotEmpty}');
 
     final results = await Future.wait([
       ServerApi.getPricingAsync(),
@@ -915,6 +917,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     final pricing = results[0] as PricingInfo?;
     final addrResult = results[1] as DepositAddressResult?;
+    // ignore: avoid_print
+    print('[QR] 가격 조회 ▶ ${pricing != null ? "성공 (${pricing.packages.length}개 패키지)" : "실패/null"}');
+    // ignore: avoid_print
+    print('[QR] 주소 조회 ▶ ${addrResult != null ? "성공 address=${addrResult.address} invalidated=${addrResult.invalidated}" : "실패/null (token비어있음=${token.isEmpty} userId비어있음=${userId.isEmpty})"}');
 
     if (mounted) {
       setState(() {
