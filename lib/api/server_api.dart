@@ -161,6 +161,35 @@ class ServerApi {
     }
   }
 
+  /// GET /api/user/subscription?token= — 현재 구독 상태 폴링용
+  static Future<({String? status, DateTime? expireDate, int remainingDays})?> getSubscriptionAsync(
+    String token,
+  ) async {
+    if (!enabled || token.isEmpty) return null;
+    try {
+      final resp = await _client
+          .get(Uri.parse('$baseUrl/api/user/subscription?token=${Uri.encodeComponent(token)}'))
+          .timeout(_timeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final root = jsonDecode(resp.body) as Map<String, dynamic>;
+      final expStr = root['expireDate']?.toString();
+      DateTime? expiry;
+      if (expStr != null && expStr.isNotEmpty) {
+        expiry = DateTime.tryParse(expStr)?.toLocal();
+      }
+      // 구독 정보가 변경됐을 때 전역 상태도 업데이트
+      if (expiry != null) subscriptionExpiry = expiry;
+      if (root['status'] != null) subscriptionStatus = root['status']?.toString();
+      return (
+        status: root['status']?.toString(),
+        expireDate: expiry,
+        remainingDays: (root['remainingDays'] as num?)?.toInt() ?? 0,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// POST /api/logout — 앱 종료 시 서버 세션 명시적 삭제
   static Future<void> logoutAsync(String token) async {
     if (!enabled || token.isEmpty) return;

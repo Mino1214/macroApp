@@ -1014,10 +1014,48 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
+    // 다이얼로그 열기 전 구독 만료일 스냅샷 (변경 감지용)
+    final expirySnapshot = ServerApi.subscriptionExpiry;
+    // QR 표시 여부 (일수 선택 후에만 true)
+    bool qrVisible = false;
+    // 입금 확인 폴링 타이머
+    Timer? paymentPollingTimer;
+
+    void startPaymentPolling(BuildContext dialogCtx) {
+      paymentPollingTimer?.cancel();
+      paymentPollingTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+        final token = ServerApi.currentToken;
+        if (token == null || !mounted) { paymentPollingTimer?.cancel(); return; }
+        final sub = await ServerApi.getSubscriptionAsync(token);
+        if (sub == null || !mounted) return;
+        // 만료일이 바뀌었으면 입금 처리 완료
+        if (sub.expireDate != null && sub.expireDate != expirySnapshot) {
+          paymentPollingTimer?.cancel();
+          if (dialogCtx.mounted) Navigator.of(dialogCtx, rootNavigator: true).pop();
+          if (mounted) {
+            setState(() => _refreshExpiry());
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  '✅ 충전 완료! ${sub.remainingDays}일까지 이용 가능합니다.',
+                  style: const TextStyle(color: Colors.white),
+                ),
+                backgroundColor: AppTheme.accent.withOpacity(0.9),
+                duration: const Duration(seconds: 4),
+              ),
+            );
+          }
+        }
+      });
+    }
+
     showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) {
+      builder: (ctx) {
+        // 폴링 시작 (다이얼로그 컨텍스트 전달)
+        WidgetsBinding.instance.addPostFrameCallback((_) => startPaymentPolling(ctx));
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
           final address = _depositAddress;
           final loading = _depositAddressLoading;
           final invalidated = _depositAddressInvalidated;
@@ -1027,7 +1065,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           // 현재 선택 일수 기준 금액 계산
           double calcAmount() {
             if (pricingData == null) return 0;
-            // 패키지 정확 매칭 우선
             final pkg = pricingData.packages
                 .where((p) => p.days == _selectedDays)
                 .firstOrNull;
@@ -1042,6 +1079,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             ss(() {
               _selectedDays = clamped;
               _daysController.text = clamped.toString();
+              qrVisible = true; // 일수 변경 시 QR 활성화
             });
           }
 
@@ -1108,7 +1146,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 6),
                           child: GestureDetector(
-                            onTap: () => updateDays(pkg.days, setDialogState),
+                            onTap: () {
+                              updateDays(pkg.days, setDialogState);
+                              setDialogState(() => qrVisible = true);
+                            },
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 140),
                               width: double.infinity,
@@ -1237,42 +1278,65 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     ],
 
                     const SizedBox(height: 14),
-                    const Text(
-                      'TRC20 USDT 개인 입금주소로 송금 후\n관리자에게 문의해 주세요.',
-                      style: TextStyle(color: AppTheme.muted, fontSize: 11),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 12),
 
-                    // QR 영역
-                    if (loading)
-                      const SizedBox(
-                        height: 180,
-                        child: Center(child: CircularProgressIndicator(color: AppTheme.accent)),
-                      )
-                    else if (error != null)
+                    // QR 영역 — 일수 선택 전 안내, 선택 후 QR 표시
+                    if (!qrVisible)
                       Container(
-                        padding: const EdgeInsets.all(12),
-                        child: Text(
-                          error,
-                          style: const TextStyle(color: AppTheme.logRed, fontSize: 12),
-                          textAlign: TextAlign.center,
-                        ),
-                      )
-                    else if (address != null && address.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.all(12),
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 24),
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
+                          color: AppTheme.bgDark,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppTheme.muted.withOpacity(0.15)),
                         ),
-                        child: QrImageView(
-                          data: address,
-                          version: QrVersions.auto,
-                          size: 180,
-                          backgroundColor: Colors.white,
+                        child: Column(
+                          children: [
+                            Icon(Icons.touch_app_rounded, color: AppTheme.muted.withOpacity(0.5), size: 32),
+                            const SizedBox(height: 8),
+                            Text(
+                              '위에서 기간을 선택하면\n입금 QR이 표시됩니다',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: AppTheme.muted.withOpacity(0.6), fontSize: 12, height: 1.5),
+                            ),
+                          ],
                         ),
+                      )
+                    else ...[
+                      const Text(
+                        'TRC20 USDT 개인 입금주소로 송금하면\n자동으로 구독 기간이 연장됩니다.',
+                        style: TextStyle(color: AppTheme.muted, fontSize: 11),
+                        textAlign: TextAlign.center,
                       ),
+                      const SizedBox(height: 12),
+                      if (loading)
+                        const SizedBox(
+                          height: 180,
+                          child: Center(child: CircularProgressIndicator(color: AppTheme.accent)),
+                        )
+                      else if (error != null)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                            error,
+                            style: const TextStyle(color: AppTheme.logRed, fontSize: 12),
+                            textAlign: TextAlign.center,
+                          ),
+                        )
+                      else if (address != null && address.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: QrImageView(
+                            data: address,
+                            version: QrVersions.auto,
+                            size: 180,
+                            backgroundColor: Colors.white,
+                          ),
+                        ),
+                    ],
 
                     const SizedBox(height: 12),
 
@@ -1320,7 +1384,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
                     const SizedBox(height: 8),
                     TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
+                      onPressed: () {
+                        paymentPollingTimer?.cancel();
+                        Navigator.of(ctx).pop();
+                      },
                       child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
                     ),
                   ],
@@ -1329,8 +1396,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             ),
           );
         },
-      ),
-    );
+        );
+      },
+    ).then((_) => paymentPollingTimer?.cancel());
   }
 
   // 잔고 수치 포맷 (최대 6자리 유효숫자)
