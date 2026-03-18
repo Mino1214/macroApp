@@ -64,7 +64,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   // 가격/날짜 선택 상태
   PricingInfo? _pricing;
-  int _selectedDays = 30;
+  int _selectedDays = 0;
   final TextEditingController _daysController = TextEditingController(text: '30');
 
   @override
@@ -1004,11 +1004,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         _depositAddressError = addrResult == null
             ? '입금주소를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요.'
             : null;
-        // 기본 선택 일수: 첫 번째 패키지 or 30
-        if (pricing != null && pricing.packages.isNotEmpty) {
-          _selectedDays = pricing.packages.first.days;
-          _daysController.text = _selectedDays.toString();
-        }
+        // 다이얼로그 열릴 때 선택 초기화 (사용자가 직접 선택하도록)
+        _selectedDays = 0;
+        _daysController.text = '';
       });
     }
 
@@ -1029,22 +1027,26 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         final sub = await ServerApi.getSubscriptionAsync(token);
         if (sub == null || !mounted) return;
         // 만료일이 바뀌었으면 입금 처리 완료
-        if (sub.expireDate != null && sub.expireDate != expirySnapshot) {
-          paymentPollingTimer?.cancel();
-          if (dialogCtx.mounted) Navigator.of(dialogCtx, rootNavigator: true).pop();
-          if (mounted) {
-            setState(() => _refreshExpiry());
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  '✅ 충전 완료! ${sub.remainingDays}일까지 이용 가능합니다.',
-                  style: const TextStyle(color: Colors.white),
-                ),
-                backgroundColor: AppTheme.accent.withOpacity(0.9),
-                duration: const Duration(seconds: 4),
+        // UTC/Local 차이를 무시하고 ms 기준으로 비교
+        if (sub.expireDate == null) return;
+        final snapMs = expirySnapshot?.millisecondsSinceEpoch ?? 0;
+        final newMs  = sub.expireDate!.millisecondsSinceEpoch;
+        if (newMs == snapMs) return; // 변화 없으면 무시 (false positive 방지)
+
+        paymentPollingTimer?.cancel();
+        if (dialogCtx.mounted) Navigator.of(dialogCtx, rootNavigator: true).pop();
+        if (mounted) {
+          setState(() => _refreshExpiry());
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '✅ 충전 완료! ${sub.remainingDays}일 이용 가능합니다.',
+                style: const TextStyle(color: Colors.white),
               ),
-            );
-          }
+              backgroundColor: AppTheme.accent.withOpacity(0.9),
+              duration: const Duration(seconds: 4),
+            ),
+          );
         }
       });
     }
@@ -1079,7 +1081,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             ss(() {
               _selectedDays = clamped;
               _daysController.text = clamped.toString();
-              qrVisible = true; // 일수 변경 시 QR 활성화
+              qrVisible = false; // 일수 바뀌면 QR 숨김 — "입금 신청" 버튼을 다시 눌러야 함
             });
           }
 
@@ -1247,7 +1249,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     ),
 
                     // ---------- 금액 표시 ----------
-                    if (pricingData != null) ...[
+                    if (pricingData != null && _selectedDays > 0) ...[
                       const SizedBox(height: 10),
                       Container(
                         width: double.infinity,
@@ -1284,10 +1286,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
-                          onPressed: () => setDialogState(() => qrVisible = true),
+                          onPressed: _selectedDays <= 0
+                              ? null // 기간 미선택 시 비활성화
+                              : () => setDialogState(() => qrVisible = true),
                           icon: const Icon(Icons.qr_code_rounded, size: 18),
                           label: Text(
-                            '입금 신청  (\$${ calcAmount().toStringAsFixed(2)} USDT)',
+                            _selectedDays <= 0
+                                ? '기간을 먼저 선택하세요'
+                                : '입금 신청  (\$${calcAmount().toStringAsFixed(2)} USDT)',
                             style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
                           ),
                         ),
