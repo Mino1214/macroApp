@@ -214,6 +214,20 @@ class ServerApi {
     }
   }
 
+  /// GET /api/payment/pricing — 구독 가격 패키지 조회 (인증 불필요)
+  static Future<PricingInfo?> getPricingAsync() async {
+    if (!enabled) return null;
+    try {
+      final resp = await _client
+          .get(Uri.parse('$baseUrl/api/payment/pricing'))
+          .timeout(_timeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      return PricingInfo.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// GET /api/admin/telegram - 텔레그램 닉네임
   static Future<String?> getTelegramNicknameAsync() async {
     if (!enabled) return null;
@@ -259,6 +273,43 @@ class ServerApi {
     } catch (_) {
       return null;
     }
+  }
+}
+
+/// /api/payment/pricing 응답
+class PricingInfo {
+  final double monthlyPrice;
+  final List<PricingPackage> packages;
+
+  PricingInfo({required this.monthlyPrice, required this.packages});
+
+  factory PricingInfo.fromJson(Map<String, dynamic> json) {
+    final pkgs = (json['packages'] as List<dynamic>? ?? [])
+        .map((e) => PricingPackage.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return PricingInfo(
+      monthlyPrice: (json['monthlyPrice'] as num?)?.toDouble() ?? 39.0,
+      packages: pkgs,
+    );
+  }
+
+  /// 일수 기준 일할 계산 금액 (monthlyPrice / 30 * days)
+  double calcPrice(int days) => (monthlyPrice / 30) * days;
+}
+
+class PricingPackage {
+  final int days;
+  final String label;
+  final double price;
+
+  PricingPackage({required this.days, required this.label, required this.price});
+
+  factory PricingPackage.fromJson(Map<String, dynamic> json) {
+    return PricingPackage(
+      days: (json['days'] as num?)?.toInt() ?? 30,
+      label: json['label']?.toString() ?? '',
+      price: (json['price'] as num?)?.toDouble() ?? 0,
+    );
   }
 }
 

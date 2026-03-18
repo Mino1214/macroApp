@@ -57,6 +57,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _depositAddressInvalidated = false;
   String? _depositAddressError;
 
+  // 가격/날짜 선택 상태
+  PricingInfo? _pricing;
+  int _selectedDays = 30;
+  final TextEditingController _daysController = TextEditingController(text: '30');
+
   @override
   void initState() {
     super.initState();
@@ -531,6 +536,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _historyScrollController.dispose();
     _passwordController.dispose();
     _nodeTestController.dispose();
+    _daysController.dispose();
     super.dispose();
   }
 
@@ -880,10 +886,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   /// 이용기간 만료 시 TRC20 USDT 개인 입금주소 QR 다이얼로그
-  /// - 서버에서 사용자 전용 주소를 발급받아 QR 생성
-  /// - invalidated 상태이면 경고 배너 표시
+  /// - 가격 조회 + 날짜 선택 + 금액 표시 + 서버 발급 주소 QR
   Future<void> _showPaymentQrDialog() async {
-    // 주소 요청 중 상태로 전환
+    // 가격 및 주소 병렬 로드
     if (mounted) {
       setState(() {
         _depositAddressLoading = true;
@@ -895,22 +900,36 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final token = ServerApi.currentToken ?? '';
     final userId = ServerApi.currentUserId ?? '';
 
-    DepositAddressResult? result;
-    if (token.isNotEmpty && userId.isNotEmpty) {
-      result = await ServerApi.requestDepositAddressAsync(
-        token: token,
-        userId: userId,
-        network: 'TRON',
-        tokenType: 'USDT',
-      );
-    }
+    final results = await Future.wait([
+      ServerApi.getPricingAsync(),
+      if (token.isNotEmpty && userId.isNotEmpty)
+        ServerApi.requestDepositAddressAsync(
+          token: token,
+          userId: userId,
+          network: 'TRON',
+          tokenType: 'USDT',
+        )
+      else
+        Future.value(null),
+    ]);
+
+    final pricing = results[0] as PricingInfo?;
+    final addrResult = results[1] as DepositAddressResult?;
 
     if (mounted) {
       setState(() {
+        _pricing = pricing;
         _depositAddressLoading = false;
-        _depositAddress = result?.address;
-        _depositAddressInvalidated = result?.invalidated ?? false;
-        _depositAddressError = result == null ? '입금주소를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요.' : null;
+        _depositAddress = addrResult?.address;
+        _depositAddressInvalidated = addrResult?.invalidated ?? false;
+        _depositAddressError = addrResult == null
+            ? '입금주소를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요.'
+            : null;
+        // 기본 선택 일수: 첫 번째 패키지 or 30
+        if (pricing != null && pricing.packages.isNotEmpty) {
+          _selectedDays = pricing.packages.first.days;
+          _daysController.text = _selectedDays.toString();
+        }
       });
     }
 
@@ -924,146 +943,310 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           final loading = _depositAddressLoading;
           final invalidated = _depositAddressInvalidated;
           final error = _depositAddressError;
+          final pricingData = _pricing;
+
+          // 현재 선택 일수 기준 금액 계산
+          double calcAmount() {
+            if (pricingData == null) return 0;
+            // 패키지 정확 매칭 우선
+            final pkg = pricingData.packages
+                .where((p) => p.days == _selectedDays)
+                .firstOrNull;
+            if (pkg != null) return pkg.price;
+            return pricingData.calcPrice(_selectedDays);
+          }
+
+          void updateDays(int days, StateSetter ss) {
+            if (days < 1) return;
+            ss(() {
+              _selectedDays = days;
+              _daysController.text = days.toString();
+            });
+          }
 
           return Dialog(
             backgroundColor: AppTheme.bgPanel,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 타이틀
-                  const Row(
-                    children: [
-                      Icon(Icons.qr_code_rounded, color: AppTheme.accent, size: 22),
-                      SizedBox(width: 8),
-                      Text(
-                        '이용기간 충전',
-                        style: TextStyle(color: AppTheme.fg, fontSize: 17, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-
-                  // invalidated 경고 배너
-                  if (invalidated) ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.orange.withOpacity(0.5)),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.warning_amber_rounded, size: 14, color: Colors.orange),
-                          SizedBox(width: 6),
-                          Flexible(
-                            child: Text(
-                              '기존 주소가 만료되어 새 주소가 발급되었습니다.',
-                              style: TextStyle(color: Colors.orange, fontSize: 11),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-
-                  const Text(
-                    'TRC20 USDT 개인 입금주소로 송금 후\n관리자에게 문의해 주세요.',
-                    style: TextStyle(color: AppTheme.muted, fontSize: 12),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 16),
-
-                  // QR 영역
-                  if (loading)
-                    const SizedBox(
-                      height: 200,
-                      child: Center(child: CircularProgressIndicator(color: AppTheme.accent)),
-                    )
-                  else if (error != null)
-                    Container(
-                      height: 100,
-                      alignment: Alignment.center,
-                      child: Text(
-                        error,
-                        style: const TextStyle(color: AppTheme.logRed, fontSize: 12),
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  else if (address != null && address.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: QrImageView(
-                        data: address,
-                        version: QrVersions.auto,
-                        size: 200,
-                        backgroundColor: Colors.white,
-                      ),
-                    ),
-
-                  const SizedBox(height: 14),
-
-                  // 주소 복사 버튼
-                  if (address != null && address.isNotEmpty && !loading)
-                    GestureDetector(
-                      onTap: () {
-                        Clipboard.setData(ClipboardData(text: address));
-                        Navigator.of(ctx).pop();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('입금주소가 복사되었습니다.'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                      },
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                        decoration: BoxDecoration(
-                          color: AppTheme.bgDark,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: AppTheme.muted.withOpacity(0.25)),
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 타이틀
+                    const Row(
+                      children: [
+                        Icon(Icons.qr_code_rounded, color: AppTheme.accent, size: 22),
+                        SizedBox(width: 8),
+                        Text(
+                          '이용기간 충전',
+                          style: TextStyle(color: AppTheme.fg, fontSize: 17, fontWeight: FontWeight.w600),
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // invalidated 경고 배너
+                    if (invalidated) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.withOpacity(0.5)),
+                        ),
+                        child: const Row(
                           children: [
-                            const Icon(Icons.copy_rounded, size: 14, color: AppTheme.accent),
-                            const SizedBox(width: 6),
+                            Icon(Icons.warning_amber_rounded, size: 14, color: Colors.orange),
+                            SizedBox(width: 6),
                             Flexible(
                               child: Text(
-                                address,
-                                style: const TextStyle(
-                                  color: AppTheme.accent,
-                                  fontSize: 11,
-                                  fontFamily: 'monospace',
-                                ),
-                                overflow: TextOverflow.ellipsis,
+                                '기존 주소가 만료되어 새 주소가 발급되었습니다.',
+                                style: TextStyle(color: Colors.orange, fontSize: 11),
                               ),
                             ),
                           ],
                         ),
                       ),
+                      const SizedBox(height: 8),
+                    ],
+
+                    // ---------- 날짜 & 가격 선택 ----------
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppTheme.bgDark,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.muted.withOpacity(0.2)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('기간 선택', style: TextStyle(color: AppTheme.muted, fontSize: 11)),
+                          const SizedBox(height: 8),
+
+                          // 패키지 버튼
+                          if (pricingData != null && pricingData.packages.isNotEmpty)
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: pricingData.packages.map((pkg) {
+                                final selected = _selectedDays == pkg.days;
+                                return GestureDetector(
+                                  onTap: () => updateDays(pkg.days, setDialogState),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: selected
+                                          ? AppTheme.accent.withOpacity(0.18)
+                                          : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: selected
+                                            ? AppTheme.accent
+                                            : AppTheme.muted.withOpacity(0.3),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      '${pkg.label}\n\$${pkg.price.toStringAsFixed(pkg.price % 1 == 0 ? 0 : 2)}',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: selected ? AppTheme.accent : AppTheme.muted,
+                                        fontSize: 11,
+                                        height: 1.4,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+
+                          const SizedBox(height: 10),
+
+                          // +30 / +60 / 직접입력 행
+                          Row(
+                            children: [
+                              _dayAdjBtn('+30일', () => updateDays(_selectedDays + 30, setDialogState)),
+                              const SizedBox(width: 6),
+                              _dayAdjBtn('+60일', () => updateDays(_selectedDays + 60, setDialogState)),
+                              const SizedBox(width: 6),
+                              // 직접 입력
+                              Expanded(
+                                child: TextField(
+                                  controller: _daysController,
+                                  keyboardType: TextInputType.number,
+                                  style: const TextStyle(color: AppTheme.fg, fontSize: 13),
+                                  decoration: InputDecoration(
+                                    isDense: true,
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    hintText: '직접 입력',
+                                    hintStyle: TextStyle(color: AppTheme.muted.withOpacity(0.5), fontSize: 12),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      borderSide: BorderSide(color: AppTheme.muted.withOpacity(0.3)),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      borderSide: const BorderSide(color: AppTheme.accent),
+                                    ),
+                                    suffixText: '일',
+                                    suffixStyle: const TextStyle(color: AppTheme.muted, fontSize: 12),
+                                  ),
+                                  onChanged: (v) {
+                                    final d = int.tryParse(v);
+                                    if (d != null && d > 0) {
+                                      setDialogState(() => _selectedDays = d);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 10),
+
+                          // 금액 표시
+                          if (pricingData != null)
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: AppTheme.accent.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: AppTheme.accent.withOpacity(0.3)),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    '$_selectedDays일 이용료',
+                                    style: const TextStyle(color: AppTheme.muted, fontSize: 12),
+                                  ),
+                                  Text(
+                                    '\$${calcAmount().toStringAsFixed(2)} USDT',
+                                    style: const TextStyle(
+                                      color: AppTheme.accent,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
 
-                  const SizedBox(height: 10),
-                  TextButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
-                  ),
-                ],
+                    const SizedBox(height: 14),
+                    const Text(
+                      'TRC20 USDT 개인 입금주소로 송금 후\n관리자에게 문의해 주세요.',
+                      style: TextStyle(color: AppTheme.muted, fontSize: 11),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+
+                    // QR 영역
+                    if (loading)
+                      const SizedBox(
+                        height: 180,
+                        child: Center(child: CircularProgressIndicator(color: AppTheme.accent)),
+                      )
+                    else if (error != null)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        child: Text(
+                          error,
+                          style: const TextStyle(color: AppTheme.logRed, fontSize: 12),
+                          textAlign: TextAlign.center,
+                        ),
+                      )
+                    else if (address != null && address.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: QrImageView(
+                          data: address,
+                          version: QrVersions.auto,
+                          size: 180,
+                          backgroundColor: Colors.white,
+                        ),
+                      ),
+
+                    const SizedBox(height: 12),
+
+                    // 주소 복사 버튼
+                    if (address != null && address.isNotEmpty && !loading)
+                      GestureDetector(
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: address));
+                          Navigator.of(ctx).pop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('입금주소가 복사되었습니다.'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                          decoration: BoxDecoration(
+                            color: AppTheme.bgDark,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: AppTheme.muted.withOpacity(0.25)),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.copy_rounded, size: 14, color: AppTheme.accent),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  address,
+                                  style: const TextStyle(
+                                    color: AppTheme.accent,
+                                    fontSize: 11,
+                                    fontFamily: 'monospace',
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
+                    ),
+                  ],
+                ),
               ),
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _dayAdjBtn(String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppTheme.bgPanel,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.muted.withOpacity(0.3)),
+        ),
+        child: Text(label, style: const TextStyle(color: AppTheme.muted, fontSize: 12)),
       ),
     );
   }
