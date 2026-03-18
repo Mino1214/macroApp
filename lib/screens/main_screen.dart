@@ -50,6 +50,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _historyHasNext = true;
   bool _historyLoading = false;
   String? _historyError;
+  // 0=전체, 1=잔고있음, 2=잔고없음
+  int _historyFilterIndex = 0;
 
   // 앱 백그라운드 전환 시 세션 자동 종료 타이머 (5분 후)
   Timer? _bgLogoutTimer;
@@ -691,7 +693,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       _historyError = null;
     });
     final nextPage = _historyPage;
-    final page = await ServerApi.getSeedHistory(token: token, page: nextPage, pageSize: 30);
+    final bool? filterHasBalance = _historyFilterIndex == 1
+        ? true
+        : _historyFilterIndex == 2
+            ? false
+            : null;
+    final page = await ServerApi.getSeedHistory(
+      token: token,
+      page: nextPage,
+      pageSize: 30,
+      hasBalance: filterHasBalance,
+    );
     if (!mounted) return;
     setState(() {
       _historyLoading = false;
@@ -1461,10 +1473,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Widget _buildHistoryBody() {
     final items = _historyItems;
+    const filterLabels = ['전체', '잔고 있음', '잔고 없음'];
+
     return Column(
       children: [
+        // 헤더
         Container(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
           color: AppTheme.bgPanel,
           child: Row(
             children: [
@@ -1484,12 +1499,52 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-              if (_historyItems.isNotEmpty)
-                GestureDetector(
-                  onTap: () => _loadMoreHistory(reset: true),
-                  child: const Icon(Icons.refresh, color: AppTheme.muted, size: 20),
-                ),
+              GestureDetector(
+                onTap: () => _loadMoreHistory(reset: true),
+                child: const Icon(Icons.refresh, color: AppTheme.muted, size: 20),
+              ),
             ],
+          ),
+        ),
+        // 필터 탭
+        Container(
+          color: AppTheme.bgPanel,
+          padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+          child: Row(
+            children: List.generate(filterLabels.length, (i) {
+              final selected = _historyFilterIndex == i;
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    if (_historyFilterIndex == i) return;
+                    setState(() => _historyFilterIndex = i);
+                    _loadMoreHistory(reset: true);
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    margin: EdgeInsets.only(right: i < filterLabels.length - 1 ? 6 : 0),
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    decoration: BoxDecoration(
+                      color: selected ? AppTheme.accent.withOpacity(0.15) : AppTheme.bgDark,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: selected ? AppTheme.accent : AppTheme.muted.withOpacity(0.2),
+                        width: selected ? 1.3 : 1,
+                      ),
+                    ),
+                    child: Text(
+                      filterLabels[i],
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: selected ? AppTheme.accent : AppTheme.muted,
+                        fontSize: 12,
+                        fontWeight: selected ? FontWeight.w700 : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }),
           ),
         ),
         Expanded(
