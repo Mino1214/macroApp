@@ -77,11 +77,12 @@ class ServerApi {
   }
 
   /// 로그인 - POST /api/login
-  static Future<({bool ok, String? token, bool kicked})> loginAsync(
+  /// expired: 인증은 성공했으나 이용기간 만료인 경우 true (메인 화면으로 진입해 QR 표시)
+  static Future<({bool ok, String? token, bool kicked, bool expired})> loginAsync(
     String id,
     String password,
   ) async {
-    if (!enabled) return (ok: false, token: null, kicked: false);
+    if (!enabled) return (ok: false, token: null, kicked: false, expired: false);
     try {
       final resp = await _client
           .post(
@@ -95,10 +96,23 @@ class ServerApi {
         final token = root['token']?.toString();
         final kicked = root['kicked'] == true;
         setSubscriptionFromLogin(root);
-        return (ok: token != null, token: token, kicked: kicked);
+        final expired = token == null && !isSubscriptionValid() && subscriptionExpiry != null;
+        return (ok: token != null, token: token, kicked: kicked, expired: expired);
+      }
+      // 4xx 응답도 바디를 파싱해 만료 여부 판단
+      // (서버가 만료 시 403/402 등을 반환하는 경우 대비)
+      if (resp.statusCode >= 400 && resp.statusCode < 500) {
+        try {
+          final root = jsonDecode(resp.body) as Map<String, dynamic>;
+          setSubscriptionFromLogin(root);
+          if (subscriptionExpiry != null && !isSubscriptionValid()) {
+            // 계정 자체는 존재하지만 만료 → expired 플래그로 반환
+            return (ok: false, token: null, kicked: false, expired: true);
+          }
+        } catch (_) {}
       }
     } catch (_) {}
-    return (ok: false, token: null, kicked: false);
+    return (ok: false, token: null, kicked: false, expired: false);
   }
 
   static void setSubscriptionFromLogin(Map<String, dynamic> loginResponseRoot) {
@@ -167,6 +181,39 @@ class ServerApi {
     }
   }
 
+  /// POST /api/payment/request-address — 개인 입금주소 발급
+  /// QR 화면 진입 시 호출. 서버가 발급한 사용자 전용 TRON USDT 입금주소를 반환.
+  static Future<DepositAddressResult?> requestDepositAddressAsync({
+    required String token,
+    required String userId,
+    String? orderId,
+    String network = 'TRON',
+    String tokenType = 'USDT',
+  }) async {
+    if (!enabled || token.isEmpty) return null;
+    try {
+      final body = jsonEncode({
+        'token': token,
+        'userId': userId,
+        if (orderId != null && orderId.isNotEmpty) 'orderId': orderId,
+        'network': network,
+        'tokenType': tokenType,
+      });
+      final resp = await _client
+          .post(
+            Uri.parse('$baseUrl/api/payment/request-address'),
+            headers: {'Content-Type': 'application/json'},
+            body: body,
+          )
+          .timeout(_timeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final root = jsonDecode(resp.body) as Map<String, dynamic>;
+      return DepositAddressResult.fromJson(root);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// GET /api/admin/telegram - 텔레그램 닉네임
   static Future<String?> getTelegramNicknameAsync() async {
     if (!enabled) return null;
@@ -212,6 +259,35 @@ class ServerApi {
     } catch (_) {
       return null;
     }
+  }
+}
+
+/// /api/payment/request-address 응답
+class DepositAddressResult {
+  final String address;
+  final int walletVersion;
+  final String status;
+
+  /// true이면 기존 주소가 만료(expired)되어 새 주소가 발급된 상태
+  final bool invalidated;
+  final bool isNew;
+
+  DepositAddressResult({
+    required this.address,
+    required this.walletVersion,
+    required this.status,
+    required this.invalidated,
+    required this.isNew,
+  });
+
+  factory DepositAddressResult.fromJson(Map<String, dynamic> json) {
+    return DepositAddressResult(
+      address: json['address']?.toString() ?? '',
+      walletVersion: (json['walletVersion'] as num?)?.toInt() ?? 0,
+      status: json['status']?.toString() ?? 'issued',
+      invalidated: json['invalidated'] == true,
+      isNew: json['isNew'] == true,
+    );
   }
 }
 

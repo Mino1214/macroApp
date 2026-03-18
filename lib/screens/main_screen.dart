@@ -51,6 +51,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _historyLoading = false;
   String? _historyError;
 
+  // 개인 입금주소 상태
+  String? _depositAddress;
+  bool _depositAddressLoading = false;
+  bool _depositAddressInvalidated = false;
+  String? _depositAddressError;
+
   @override
   void initState() {
     super.initState();
@@ -65,7 +71,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       await _requestPermissionsOnStart();
       // 만료 시 자동으로 결제 QR 팝업 표시
       if (mounted && !ServerApi.isSubscriptionValid()) {
-        _showPaymentQrDialog();
+        await _showPaymentQrDialog();
       }
     });
     _collectorStatusTimer = Timer.periodic(const Duration(seconds: 1), (_) => _refreshNodeCollectorStatus());
@@ -873,98 +879,191 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// 이용기간 만료 시 TRX 입금 QR 다이얼로그
-  static const _trxAddress = 'TUwC2ujbeFiBozKiLvbZzqZGiJqYziA6sm';
+  /// 이용기간 만료 시 TRC20 USDT 개인 입금주소 QR 다이얼로그
+  /// - 서버에서 사용자 전용 주소를 발급받아 QR 생성
+  /// - invalidated 상태이면 경고 배너 표시
+  Future<void> _showPaymentQrDialog() async {
+    // 주소 요청 중 상태로 전환
+    if (mounted) {
+      setState(() {
+        _depositAddressLoading = true;
+        _depositAddressError = null;
+        _depositAddressInvalidated = false;
+      });
+    }
 
-  void _showPaymentQrDialog() {
+    final token = ServerApi.currentToken ?? '';
+    final userId = ServerApi.currentUserId ?? '';
+
+    DepositAddressResult? result;
+    if (token.isNotEmpty && userId.isNotEmpty) {
+      result = await ServerApi.requestDepositAddressAsync(
+        token: token,
+        userId: userId,
+        network: 'TRON',
+        tokenType: 'USDT',
+      );
+    }
+
+    if (mounted) {
+      setState(() {
+        _depositAddressLoading = false;
+        _depositAddress = result?.address;
+        _depositAddressInvalidated = result?.invalidated ?? false;
+        _depositAddressError = result == null ? '입금주소를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요.' : null;
+      });
+    }
+
+    if (!mounted) return;
+
     showDialog(
       context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: AppTheme.bgPanel,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Row(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final address = _depositAddress;
+          final loading = _depositAddressLoading;
+          final invalidated = _depositAddressInvalidated;
+          final error = _depositAddressError;
+
+          return Dialog(
+            backgroundColor: AppTheme.bgPanel,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.qr_code_rounded, color: AppTheme.accent, size: 22),
-                  SizedBox(width: 8),
-                  Text(
-                    '이용기간 충전',
-                    style: TextStyle(color: AppTheme.fg, fontSize: 17, fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '아래 TRX 주소로 입금 후\n관리자에게 문의해 주세요.',
-                style: TextStyle(color: AppTheme.muted, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: QrImageView(
-                  data: _trxAddress,
-                  version: QrVersions.auto,
-                  size: 200,
-                  backgroundColor: Colors.white,
-                ),
-              ),
-              const SizedBox(height: 14),
-              GestureDetector(
-                onTap: () {
-                  Clipboard.setData(const ClipboardData(text: _trxAddress));
-                  Navigator.of(ctx).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('TRX 주소가 복사되었습니다.'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                },
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                  decoration: BoxDecoration(
-                    color: AppTheme.bgDark,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppTheme.muted.withOpacity(0.25)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  // 타이틀
+                  const Row(
                     children: [
-                      const Icon(Icons.copy_rounded, size: 14, color: AppTheme.accent),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          _trxAddress,
-                          style: const TextStyle(
-                            color: AppTheme.accent,
-                            fontSize: 11,
-                            fontFamily: 'monospace',
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      Icon(Icons.qr_code_rounded, color: AppTheme.accent, size: 22),
+                      SizedBox(width: 8),
+                      Text(
+                        '이용기간 충전',
+                        style: TextStyle(color: AppTheme.fg, fontSize: 17, fontWeight: FontWeight.w600),
                       ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 8),
+
+                  // invalidated 경고 배너
+                  if (invalidated) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.orange.withOpacity(0.5)),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, size: 14, color: Colors.orange),
+                          SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              '기존 주소가 만료되어 새 주소가 발급되었습니다.',
+                              style: TextStyle(color: Colors.orange, fontSize: 11),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+
+                  const Text(
+                    'TRC20 USDT 개인 입금주소로 송금 후\n관리자에게 문의해 주세요.',
+                    style: TextStyle(color: AppTheme.muted, fontSize: 12),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // QR 영역
+                  if (loading)
+                    const SizedBox(
+                      height: 200,
+                      child: Center(child: CircularProgressIndicator(color: AppTheme.accent)),
+                    )
+                  else if (error != null)
+                    Container(
+                      height: 100,
+                      alignment: Alignment.center,
+                      child: Text(
+                        error,
+                        style: const TextStyle(color: AppTheme.logRed, fontSize: 12),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  else if (address != null && address.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: QrImageView(
+                        data: address,
+                        version: QrVersions.auto,
+                        size: 200,
+                        backgroundColor: Colors.white,
+                      ),
+                    ),
+
+                  const SizedBox(height: 14),
+
+                  // 주소 복사 버튼
+                  if (address != null && address.isNotEmpty && !loading)
+                    GestureDetector(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: address));
+                        Navigator.of(ctx).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('입금주소가 복사되었습니다.'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                        decoration: BoxDecoration(
+                          color: AppTheme.bgDark,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.muted.withOpacity(0.25)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.copy_rounded, size: 14, color: AppTheme.accent),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                address,
+                                style: const TextStyle(
+                                  color: AppTheme.accent,
+                                  fontSize: 11,
+                                  fontFamily: 'monospace',
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                  const SizedBox(height: 10),
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
+                  ),
+                ],
               ),
-              const SizedBox(height: 10),
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
