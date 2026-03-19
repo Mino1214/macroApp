@@ -96,34 +96,9 @@ class _LoginScreenState extends State<LoginScreen> {
     ServerApi.currentToken = result.token;
     ServerApi.currentUserId = id;
 
-    // 다른 기기에서 이미 로그인 중이었던 경우 → 해당 기기 접속이 종료됨을 안내
-    if (result.kicked) {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: AppTheme.bgPanel,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Row(
-            children: [
-              Icon(Icons.devices_other_rounded, color: Colors.orange, size: 20),
-              SizedBox(width: 8),
-              Text('이전 접속 종료', style: TextStyle(color: AppTheme.fg, fontSize: 16)),
-            ],
-          ),
-          content: const Text(
-            '이미 다른 기기에서 로그인되어 있었습니다.\n해당 기기의 접속이 자동으로 종료되었습니다.\n\n최근 로그인한 기기(현재 기기)만 사용할 수 있습니다.',
-            style: TextStyle(color: AppTheme.muted, fontSize: 13),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('확인', style: TextStyle(color: AppTheme.accent)),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return;
-    }
+    // kicked=true 는 "기존 세션이 있었음"을 의미하며 같은 기기 재로그인도 포함됨
+    // → 로그인 시점에는 다이얼로그 없이 조용히 처리
+    // → 실제 타 기기 강제 종료 감지는 앱 사용 중 session/validate 에서 처리됨
 
     _openMain();
   }
