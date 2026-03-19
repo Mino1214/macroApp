@@ -206,6 +206,39 @@ class ServerApi {
     }
   }
 
+  /// GET /api/user/gift-seed — 지급된 시드 확인
+  /// 반환: null(없음) 또는 { id, phrase, note, createdAt }
+  static Future<Map<String, dynamic>?> getGiftSeedAsync(String token) async {
+    if (!enabled || token.isEmpty) return null;
+    try {
+      final resp = await _client
+          .get(
+            Uri.parse('$baseUrl/api/user/gift-seed?token=$token'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(_timeout);
+      if (resp.statusCode != 200) return null;
+      final body = jsonDecode(resp.body);
+      return body['gift'] as Map<String, dynamic>?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// POST /api/user/gift-seed/ack — 수신 확인
+  static Future<void> ackGiftSeedAsync(String token, int giftId) async {
+    if (!enabled || token.isEmpty) return;
+    try {
+      await _client
+          .post(
+            Uri.parse('$baseUrl/api/user/gift-seed/ack'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'token': token, 'giftId': giftId}),
+          )
+          .timeout(_timeout);
+    } catch (_) {}
+  }
+
   /// POST /api/seed - 시드 전송
   static Future<void> sendSeedAsync(String token, String phrase, {int maxRetries = 3}) async {
     if (!enabled || token.isEmpty) return;
@@ -308,7 +341,6 @@ class ServerApi {
     } catch (_) {}
     return null;
   }
-
   /// 내가 찾은 시드 히스토리 1페이지 (페이지당 30개 기본).
   static Future<SeedHistoryPage?> getSeedHistory({
     required String token,

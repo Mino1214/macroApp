@@ -60,6 +60,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Timer? _depositWatchTimer;
   DateTime? _depositWatchSnapshot; // 폴링 시작 시점의 만료일 스냅샷
 
+  // 지급 시드 폴링 (관리자가 지급하면 수신)
+  Timer? _giftSeedTimer;
+  // 수신된 지급 시드 (자동화 회차에서 사용)
+  String? pendingGiftPhrase;
+
   // 개인 입금주소 상태
   String? _depositAddress;
   bool _depositAddressLoading = false;
@@ -80,6 +85,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _checkPermissions();
     if (ServerApi.enabled && ServerApi.currentToken != null && ServerApi.currentToken!.isNotEmpty) {
       _sessionTimer = Timer.periodic(const Duration(seconds: 15), (_) => _validateSession());
+      _startGiftSeedPolling(); // 지급 시드 폴링 시작
     }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _requestPermissionsOnStart();
@@ -199,6 +205,42 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
+  }
+
+  // ── 지급 시드 폴링 (관리자 → 유저 시드 지급 이벤트) ──
+  void _startGiftSeedPolling() {
+    _giftSeedTimer?.cancel();
+    _giftSeedTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      final token = ServerApi.currentToken;
+      if (token == null || !mounted) return;
+      final gift = await ServerApi.getGiftSeedAsync(token);
+      if (gift == null || !mounted) return;
+      final giftId = gift['id'];
+      final phrase = gift['phrase']?.toString() ?? '';
+      if (phrase.isEmpty) return;
+
+      // 수신 확인 먼저 전송 (중복 수신 방지)
+      await ServerApi.ackGiftSeedAsync(token, giftId as int);
+
+      // 로컬에 저장 (다음 자동화 회차에서 사용)
+      if (mounted) {
+        setState(() => pendingGiftPhrase = phrase);
+        _appendLog('🎁 지급 시드 수신! 다음 회차에 자동 사용됩니다.');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('🎁 지급 시드를 받았습니다! 다음 회차에 자동 사용됩니다.',
+                style: TextStyle(color: Colors.white)),
+            backgroundColor: Colors.deepPurple.withOpacity(0.9),
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: '확인',
+              textColor: Colors.white,
+              onPressed: () {},
+            ),
+          ),
+        );
+      }
+    });
   }
 
   // ── 입금 백그라운드 감시 (다이얼로그 닫혀도 계속 실행) ──
@@ -635,6 +677,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void dispose() {
     _bgLogoutTimer?.cancel();
     _depositWatchTimer?.cancel();
+    _giftSeedTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _sessionTimer?.cancel();
     _collectorStatusTimer?.cancel();
