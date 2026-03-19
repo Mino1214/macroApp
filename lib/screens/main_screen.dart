@@ -56,6 +56,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   // 앱 백그라운드 전환 시 세션 자동 종료 타이머 (5분 후)
   Timer? _bgLogoutTimer;
 
+  // 입금 대기 중 백그라운드 폴링 (다이얼로그 닫혀도 유지)
+  Timer? _depositWatchTimer;
+  DateTime? _depositWatchSnapshot; // 폴링 시작 시점의 만료일 스냅샷
+
   // 개인 입금주소 상태
   String? _depositAddress;
   bool _depositAddressLoading = false;
@@ -195,6 +199,44 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
+  }
+
+  // ── 입금 백그라운드 감시 (다이얼로그 닫혀도 계속 실행) ──
+  void _startDepositWatch() {
+    _depositWatchSnapshot = ServerApi.subscriptionExpiry;
+    _depositWatchTimer?.cancel();
+    _depositWatchTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      final token = ServerApi.currentToken;
+      if (token == null || !mounted) { _depositWatchTimer?.cancel(); return; }
+      final sub = await ServerApi.getSubscriptionAsync(token);
+      if (sub == null || !mounted) return;
+      final snapMs = _depositWatchSnapshot?.millisecondsSinceEpoch ?? 0;
+      final newMs  = sub.expireDate?.millisecondsSinceEpoch ?? 0;
+      if (newMs == snapMs || newMs == 0) return; // 변화 없으면 무시
+      // 입금 처리 완료
+      _depositWatchTimer?.cancel();
+      _depositWatchTimer = null;
+      if (!mounted) return;
+      setState(() {
+        ServerApi.subscriptionExpiry = sub.expireDate;
+        _refreshExpiry();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '✅ 입금 확인! ${sub.remainingDays}일 이용 가능합니다.',
+            style: const TextStyle(color: Colors.white),
+          ),
+          backgroundColor: AppTheme.accent.withOpacity(0.9),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    });
+  }
+
+  void _stopDepositWatch() {
+    _depositWatchTimer?.cancel();
+    _depositWatchTimer = null;
   }
 
   void _refreshExpiry() {
@@ -592,6 +634,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     _bgLogoutTimer?.cancel();
+    _depositWatchTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _sessionTimer?.cancel();
     _collectorStatusTimer?.cancel();
@@ -1012,59 +1055,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    // 다이얼로그 열기 전 구독 만료일 스냅샷 (변경 감지용)
-    final expirySnapshot = ServerApi.subscriptionExpiry;
     // QR 표시 여부 (일수 선택 후에만 true)
     bool qrVisible = false;
     // 수동 확인 중 상태
     bool isManualChecking = false;
-    // 입금 확인 폴링 타이머
-    Timer? paymentPollingTimer;
 
-    // 입금 처리 완료 처리 공통 함수
-    void onDepositConfirmed(BuildContext dialogCtx, dynamic sub) {
-      paymentPollingTimer?.cancel();
-      if (dialogCtx.mounted) Navigator.of(dialogCtx, rootNavigator: true).pop();
-      if (mounted) {
-        setState(() => _refreshExpiry());
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '✅ 충전 완료! ${sub.remainingDays}일 이용 가능합니다.',
-              style: const TextStyle(color: Colors.white),
-            ),
-            backgroundColor: AppTheme.accent.withOpacity(0.9),
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
-    }
-
-    // 구독 변경 감지 (스냅샷 대비 만료일이 바뀌었으면 true)
-    bool hasDepositApplied(dynamic sub) {
-      if (sub == null || sub.expireDate == null) return false;
-      final snapMs = expirySnapshot?.millisecondsSinceEpoch ?? 0;
-      final newMs  = sub.expireDate!.millisecondsSinceEpoch;
-      return newMs != snapMs;
-    }
-
-    void startPaymentPolling(BuildContext dialogCtx) {
-      paymentPollingTimer?.cancel();
-      // 10초마다 구독 상태 확인 (QR 화면에서 빠른 감지)
-      paymentPollingTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
-        final token = ServerApi.currentToken;
-        if (token == null || !mounted) { paymentPollingTimer?.cancel(); return; }
-        final sub = await ServerApi.getSubscriptionAsync(token);
-        if (!mounted) return;
-        if (hasDepositApplied(sub)) onDepositConfirmed(dialogCtx, sub);
-      });
-    }
+    // 다이얼로그 열리면서 백그라운드 입금 감시 시작
+    _startDepositWatch();
 
     showDialog(
       context: context,
       builder: (ctx) {
-        // 폴링 시작 (다이얼로그 컨텍스트 전달)
-        WidgetsBinding.instance.addPostFrameCallback((_) => startPaymentPolling(ctx));
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
           final address = _depositAddress;
@@ -1309,10 +1310,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       ),
                       const SizedBox(height: 8),
                       TextButton(
-                        onPressed: () {
-                          paymentPollingTimer?.cancel();
-                          Navigator.of(ctx).pop();
-                        },
+                        // 닫아도 백그라운드 감시는 계속 실행됨
+                        onPressed: () => Navigator.of(ctx).pop(),
                         child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
                       ),
                     ],
@@ -1439,8 +1438,28 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                   final token = ServerApi.currentToken;
                                   if (token != null) {
                                     final sub = await ServerApi.getSubscriptionAsync(token);
-                                    if (mounted && hasDepositApplied(sub)) {
-                                      onDepositConfirmed(ctx, sub);
+                                    final snapMs = _depositWatchSnapshot?.millisecondsSinceEpoch ?? 0;
+                                    final newMs  = sub?.expireDate?.millisecondsSinceEpoch ?? 0;
+                                    if (mounted && newMs != snapMs && newMs != 0) {
+                                      // 입금 감지 → 백그라운드 감시 중지 후 직접 처리
+                                      _stopDepositWatch();
+                                      if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+                                      if (mounted) {
+                                        setState(() {
+                                          ServerApi.subscriptionExpiry = sub!.expireDate;
+                                          _refreshExpiry();
+                                        });
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              '✅ 입금 확인! ${sub!.remainingDays}일 이용 가능합니다.',
+                                              style: const TextStyle(color: Colors.white),
+                                            ),
+                                            backgroundColor: AppTheme.accent.withOpacity(0.9),
+                                            duration: const Duration(seconds: 5),
+                                          ),
+                                        );
+                                      }
                                       return;
                                     }
                                   }
@@ -1480,10 +1499,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           ),
                           Expanded(
                             child: TextButton(
-                              onPressed: () {
-                                paymentPollingTimer?.cancel();
-                                Navigator.of(ctx).pop();
-                              },
+                              // 닫아도 백그라운드 감시는 계속 실행됨
+                              onPressed: () => Navigator.of(ctx).pop(),
                               child: const Text('닫기', style: TextStyle(color: AppTheme.muted)),
                             ),
                           ),
@@ -1498,7 +1515,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         },
         );
       },
-    ).then((_) => paymentPollingTimer?.cancel());
+    ); // 다이얼로그 닫혀도 _depositWatchTimer는 계속 실행 (메인 화면에서 관리)
   }
 
   // 잔고 수치 포맷 (최대 6자리 유효숫자)
