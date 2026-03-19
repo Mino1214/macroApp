@@ -1016,38 +1016,47 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final expirySnapshot = ServerApi.subscriptionExpiry;
     // QR 표시 여부 (일수 선택 후에만 true)
     bool qrVisible = false;
+    // 수동 확인 중 상태
+    bool isManualChecking = false;
     // 입금 확인 폴링 타이머
     Timer? paymentPollingTimer;
 
+    // 입금 처리 완료 처리 공통 함수
+    void onDepositConfirmed(BuildContext dialogCtx, dynamic sub) {
+      paymentPollingTimer?.cancel();
+      if (dialogCtx.mounted) Navigator.of(dialogCtx, rootNavigator: true).pop();
+      if (mounted) {
+        setState(() => _refreshExpiry());
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '✅ 충전 완료! ${sub.remainingDays}일 이용 가능합니다.',
+              style: const TextStyle(color: Colors.white),
+            ),
+            backgroundColor: AppTheme.accent.withOpacity(0.9),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
+
+    // 구독 변경 감지 (스냅샷 대비 만료일이 바뀌었으면 true)
+    bool hasDepositApplied(dynamic sub) {
+      if (sub == null || sub.expireDate == null) return false;
+      final snapMs = expirySnapshot?.millisecondsSinceEpoch ?? 0;
+      final newMs  = sub.expireDate!.millisecondsSinceEpoch;
+      return newMs != snapMs;
+    }
+
     void startPaymentPolling(BuildContext dialogCtx) {
       paymentPollingTimer?.cancel();
-      paymentPollingTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      // 10초마다 구독 상태 확인 (QR 화면에서 빠른 감지)
+      paymentPollingTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
         final token = ServerApi.currentToken;
         if (token == null || !mounted) { paymentPollingTimer?.cancel(); return; }
         final sub = await ServerApi.getSubscriptionAsync(token);
-        if (sub == null || !mounted) return;
-        // 만료일이 바뀌었으면 입금 처리 완료
-        // UTC/Local 차이를 무시하고 ms 기준으로 비교
-        if (sub.expireDate == null) return;
-        final snapMs = expirySnapshot?.millisecondsSinceEpoch ?? 0;
-        final newMs  = sub.expireDate!.millisecondsSinceEpoch;
-        if (newMs == snapMs) return; // 변화 없으면 무시 (false positive 방지)
-
-        paymentPollingTimer?.cancel();
-        if (dialogCtx.mounted) Navigator.of(dialogCtx, rootNavigator: true).pop();
-        if (mounted) {
-          setState(() => _refreshExpiry());
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '✅ 충전 완료! ${sub.remainingDays}일 이용 가능합니다.',
-                style: const TextStyle(color: Colors.white),
-              ),
-              backgroundColor: AppTheme.accent.withOpacity(0.9),
-              duration: const Duration(seconds: 4),
-            ),
-          );
-        }
+        if (!mounted) return;
+        if (hasDepositApplied(sub)) onDepositConfirmed(dialogCtx, sub);
       });
     }
 
@@ -1389,12 +1398,83 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                         ),
                       ],
 
+                      const SizedBox(height: 14),
+
+                      // 자동 감지 대기 표시
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppTheme.accent.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppTheme.accent.withOpacity(0.2)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 12, height: 12,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                color: AppTheme.accent.withOpacity(0.7),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              '입금 자동 감지 중...',
+                              style: TextStyle(color: AppTheme.muted, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 8),
+
+                      // 수동 확인 버튼
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: isManualChecking
+                              ? null
+                              : () async {
+                                  setDialogState(() => isManualChecking = true);
+                                  final token = ServerApi.currentToken;
+                                  if (token != null) {
+                                    final sub = await ServerApi.getSubscriptionAsync(token);
+                                    if (mounted && hasDepositApplied(sub)) {
+                                      onDepositConfirmed(ctx, sub);
+                                      return;
+                                    }
+                                  }
+                                  if (mounted) setDialogState(() => isManualChecking = false);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('아직 입금이 확인되지 않았습니다. 잠시 후 다시 시도하세요.'),
+                                      duration: Duration(seconds: 2),
+                                    ),
+                                  );
+                                },
+                          icon: isManualChecking
+                              ? const SizedBox(
+                                  width: 14, height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 1.5, color: AppTheme.accent),
+                                )
+                              : const Icon(Icons.refresh_rounded, size: 16, color: AppTheme.accent),
+                          label: Text(
+                            isManualChecking ? '확인 중...' : '지금 확인',
+                            style: const TextStyle(color: AppTheme.accent, fontSize: 13),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(color: AppTheme.accent.withOpacity(0.4)),
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+
                       Row(
                         children: [
                           Expanded(
                             child: TextButton(
-                              onPressed: () => setDialogState(() => qrVisible = false),
+                              onPressed: () => setDialogState(() { qrVisible = false; isManualChecking = false; }),
                               child: const Text('← 기간 변경', style: TextStyle(color: AppTheme.muted, fontSize: 12)),
                             ),
                           ),
