@@ -161,6 +161,20 @@ class ServerApi {
     }
   }
 
+  /// POST /api/miner/report — 자동화 시작/종료 시 실제 상태 서버에 보고
+  static Future<void> reportMinerStatus(String token, String status) async {
+    if (!enabled || token.isEmpty) return;
+    try {
+      await _client
+          .post(
+            Uri.parse('$baseUrl/api/miner/report'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'token': token, 'status': status}),
+          )
+          .timeout(_timeout);
+    } catch (_) {}
+  }
+
   /// GET /api/user/subscription?token= — 현재 구독 상태 폴링용
   static Future<({String? status, DateTime? expireDate, int remainingDays})?> getSubscriptionAsync(
     String token,

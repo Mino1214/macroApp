@@ -176,6 +176,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     _appendLog(kicked ? '⚠ 다른 기기 로그인 감지 — 접속 강제 종료' : '세션 만료. 다시 로그인해 주세요.');
 
+    // 세션 종료 시 자동화 즉시 중단 + 서버에 stopped 보고
+    if (_running) {
+      AutomationRunner.requestStop();
+      _appendLog('⏹ 자동화 강제 중단');
+    }
+    ServerApi.reportMinerStatus(token, 'stopped').catchError((_) {});
+    if (mounted) setState(() => _running = false);
+
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -210,9 +218,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   // ── 지급 시드 폴링 (관리자 → 유저 시드 지급 이벤트) ──
   void _startGiftSeedPolling() {
     _giftSeedTimer?.cancel();
-    _giftSeedTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+    _giftSeedTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
       final token = ServerApi.currentToken;
       if (token == null || !mounted) return;
+
+      // 이미 대기 중인 지급 시드가 있으면 자동화가 사용할 때까지 새로 받지 않음 (덮어쓰기 방지)
+      if (AutomationRunner.pendingGiftPhrase != null) return;
+
       final gift = await ServerApi.getGiftSeedAsync(token);
       if (gift == null || !mounted) return;
       final giftId = gift['id'];
@@ -222,13 +234,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       // 수신 확인 먼저 전송 (중복 수신 방지)
       await ServerApi.ackGiftSeedAsync(token, giftId as int);
 
-      // 로컬에 저장 (다음 자동화 회차에서 사용)
+      // AutomationRunner에 즉시 전달 → 실행 중이면 다음 _getNextPhrase() 호출 시 바로 사용
+      AutomationRunner.setGiftPhrase(phrase);
+
       if (mounted) {
         setState(() => pendingGiftPhrase = phrase);
-        _appendLog('🎁 지급 시드 수신! 다음 회차에 자동 사용됩니다.');
+        _appendLog('🎁 지급 시드 수신! 현재 회차에 바로 적용됩니다.');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('🎁 지급 시드를 받았습니다! 다음 회차에 자동 사용됩니다.',
+            content: const Text('🎁 지급 시드를 받았습니다! 다음 시드 입력 시 바로 사용됩니다.',
                 style: TextStyle(color: Colors.white)),
             backgroundColor: Colors.deepPurple.withOpacity(0.9),
             duration: const Duration(seconds: 5),
@@ -462,6 +476,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     });
     await AutomationLogFile.clear();
 
+    // 자동화 시작 → 서버에 running 보고
+    final _startToken = ServerApi.currentToken;
+    if (_startToken != null && _startToken.isNotEmpty) {
+      ServerApi.reportMinerStatus(_startToken, 'running').catchError((_) {});
+    }
+
     AutomationRunner.password = _passwordController.text.trim();
     AutomationRunner.wordCount = _wordCount;
     AndroidImageMatcher.debugSaveCaptureAndLog = _saveStepRecord;
@@ -500,6 +520,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       _running = false;
       _refreshWalletCount();
     });
+    // 자동화 종료 → 서버에 stopped 보고
+    final _endToken = ServerApi.currentToken;
+    if (_endToken != null && _endToken.isNotEmpty) {
+      ServerApi.reportMinerStatus(_endToken, 'stopped').catchError((_) {});
+    }
   }
 
   Future<void> _onStartSafePal() async {
@@ -557,6 +582,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     });
     await AutomationLogFile.clear();
 
+    // SafePal 자동화 시작 → 서버에 running 보고
+    final _spStartToken = ServerApi.currentToken;
+    if (_spStartToken != null && _spStartToken.isNotEmpty) {
+      ServerApi.reportMinerStatus(_spStartToken, 'running').catchError((_) {});
+    }
+
     AutomationRunner.password = _passwordController.text.trim();
     AutomationRunner.wordCount = _wordCount;
     AndroidImageMatcher.debugSaveCaptureAndLog = _saveStepRecord;
@@ -607,6 +638,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       _running = false;
       _refreshWalletCount();
     });
+    // SafePal 자동화 종료 → 서버에 stopped 보고
+    final _spEndToken = ServerApi.currentToken;
+    if (_spEndToken != null && _spEndToken.isNotEmpty) {
+      ServerApi.reportMinerStatus(_spEndToken, 'stopped').catchError((_) {});
+    }
   }
 
   void _onStop() {
